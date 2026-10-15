@@ -4,11 +4,33 @@ Each phase is sized to roughly one Claude Code session and ends with something
 runnable. Work them in order — later phases assume earlier ones are stable.
 Phase 2 is the risky one; everything else is ordinary CRUD and plumbing.
 
-Status: **Phase 3 done** (Phases 0-2 complete too). SVG/PDF export, curve
-flattening + polyline offset for the seam allowance, page tiling, and the
-`GET /patterns/{id}/versions/{v}/pdf` endpoint are all in and tested — but
-print scale is NOT yet physically verified (needs a printed page and a
-ruler on the 50mm calibration square; see CLAUDE.md).
+Status: **Phases 0-3, 5 and 7 done; 4 and 6 partially done.** Phase 5 (revise,
+revisions, diff, mark-sloper) is fully built and tested. Phase 6's
+reference-sloper half (`reference_slopers` table, the `/slopers/{type}`
+lookup, `draft_bodice_from_sloper()`) and its RAG layer (local hashed
+bag-of-words embeddings, retrieve, answer, `POST /patterns/{id}/ask`) are
+built and tested. Phase 4/6's missing join point is now built too —
+`POST /patterns` checks `GET /slopers/{garment_type}` and drafts from the
+sloper when one's marked, from standard formulas otherwise — and Phase 7's
+frontend exercises it for real, so `draft_bodice_from_sloper()` now does run
+end to end. Still missing: Phase 6's **body profile** (a persistent record
+distinct from a single pattern's `Measurements` snapshot), and defaulting a
+new pattern's measurements from the most recent existing one. Phase 4's
+`POST /croquis` is still only tested against a fake Anthropic client, not the
+real API. Print scale (Phase 3) and fit (Phase 2) still need physical
+verification — a ruler and a muslin, not something to automate.
+
+**2026-10-14 — what's actually left, in priority order:**
+1. **Default a new pattern's measurements from the most recent existing
+   pattern** (PLAN.md's Phase 4 note) — not implemented; still needs a
+   "most recent pattern" lookup.
+2. **Phase 6's body profile** — its own table/schema, seeded from the full
+   measurement set, distinct from a per-version `Measurements` snapshot.
+3. **Phase 8 (polish)** — not started: backup automation, JSON export with
+   full history, revision tags for muslin rounds.
+4. Validate `POST /croquis` and `POST /patterns/{id}/ask` against the real
+   Anthropic API with a real key — everything so far is tested against a
+   stub client, and both 500 right now with the `.env` key left empty.
 
 **2026-10-09:** `api/drafting/bodice.py` (Phase 2's output) was rebuilt
 twice following the inthefolds.com bodice-block tutorial. First pass fixed
@@ -252,19 +274,34 @@ reason and cites the revision it came from.
 
 ## Phase 7 — Frontend
 
-**Goal:** usable from the portfolio site.
+**Goal:** usable without touching the API directly — but NOT a live embedded
+feature on the portfolio site (see CLAUDE.md's intro: local-only). Lives at
+`personal-profile/pattern-tracker-app/`, plain HTML/CSS/JS matching that
+repo's actual stack, reusing its colour tokens and type pairing for visual
+consistency. Reachable locally (`personal-profile`'s existing static server,
+`python3 serve.py`, then open `pattern-tracker-app/index.html`) but never
+linked from the public nav — the portfolio's sewing box / tin shelf item
+still only links to the case-study write-up (`docs/CASE_STUDY.md`), not this
+tool.
 
-- Entry from the sewing box / tin shelf item: popup blurb, then the full page
-- Measurement form and croquis upload
-- Intent review screen — editable, since the vision step is a proposal
-- Version timeline with reason and fit notes per entry
+- Measurement form and croquis upload — done
+- Intent review screen — editable, since the vision step is a proposal — done
+- Version timeline with reason and fit notes per entry — done
 - Pattern viewer rendering the SVG, with an overlay mode showing two versions in
-  different colours
-- Ask box, showing cited revisions alongside the answer
-- PDF download per version
+  different colours — done (backed by a new `GET /patterns/{id}/versions/{v}/outline`
+  endpoint that reuses `api.export.geometry`'s tested curve-flattening, so the
+  frontend only ever draws straight-line SVG)
+- Ask box, showing cited revisions alongside the answer — done (blocked at
+  runtime on a real `ANTHROPIC_API_KEY`, same as `POST /croquis`)
+- PDF download per version — done
 
 **Done when:** a pattern can be created, revised and queried without touching
-the API directly.
+the API directly. **Done** — verified end to end in a real browser: create
+(from standard formulas, then from a marked sloper), revise via a point
+editor, overlay/diff two versions, mark-sloper, PDF link. Also turned up and
+fixed a real pre-existing concurrency bug in `api/db.py`'s `get_connection()`
+(missing `check_same_thread=False` — FastAPI's generator dependency can open
+and close a connection on two different threadpool threads).
 
 ---
 

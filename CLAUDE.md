@@ -53,8 +53,13 @@ The tracker is not a separate system from the drafting tool. It is simply
 
 - **Backend:** Python 3.11+, FastAPI, SQLite. No Postgres, no Docker, no queue.
   Personal scale means low hundreds of revisions, not millions.
-- **Frontend:** React + TypeScript, inside the existing portfolio site. Reuse
-  that repo's components and build setup rather than adding a second app shell.
+- **Frontend:** plain HTML/CSS/JS, no framework, no build step — matches the
+  portfolio site's own actual stack (`personal-profile`, a static site served
+  by a plain Python `http.server`, not the React/TS setup this doc used to
+  assume). Lives at `personal-profile/pattern-tracker-app/`, reusing that
+  site's colour tokens and type pairing (`homepage/bookshelf.css`) for visual
+  consistency, but it's its own page, not a shared component library — and
+  it's never linked from the public nav (see the intro above: local-only).
 - **Vector search:** store float32 vectors as SQLite BLOBs, brute-force cosine
   in Python. Do NOT add pgvector, Chroma, Qdrant, or FAISS. At this scale a
   linear scan over a few hundred rows is faster than the client library's import.

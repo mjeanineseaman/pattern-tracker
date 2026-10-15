@@ -1,7 +1,8 @@
-"""FastAPI app. Currently exposes the Phase 3 PDF export endpoint, all of
-Phase 5's revision API (revise, revisions, diff, mark-sloper), the Phase
-4 lookup that reads mark-sloper's data, a sketch of Phase 4's own croquis
-intake, and Phase 6's /ask endpoint over the RAG layer.
+"""FastAPI app. Currently exposes pattern creation/listing/reading, the
+Phase 3 PDF export endpoint, all of Phase 5's revision API (revise,
+revisions, diff, mark-sloper), the Phase 4 lookup that reads mark-sloper's
+data, a sketch of Phase 4's own croquis intake, and Phase 6's /ask
+endpoint over the RAG layer.
 """
 from __future__ import annotations
 
@@ -17,20 +18,37 @@ from typing import Any, Iterator
 
 from anthropic import Anthropic
 from fastapi import Depends, FastAPI, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from api.db import get_connection
+from api.drafting.bodice import draft_bodice, draft_bodice_from_sloper
+from api.export.geometry import dart_lines, offset_polyline, piece_outline
 from api.export.pdf import render_pattern_pdf
 from api.rag.answer import answer_question
 from api.rag.embed import embed_and_store_revision
 from api.schema import (
-    DesignIntent, FieldDelta, GarmentType, Pattern, Revision, RevisionSource,
-    diff_patterns, infer_change_type, pattern_from_json, revision_from_row,
+    ChangeType, DesignIntent, FieldDelta, GarmentType, Measurements, Pattern, Revision,
+    RevisionSource, diff_patterns, infer_change_type, pattern_from_json, revision_from_row,
 )
 
 app = FastAPI(title="Pattern Tracker")
+
+# This API only ever runs on your own machine (see CLAUDE.md: never
+# deployed live) — the frontend it talks to is personal-profile's
+# local-only Phase 7 pages, served from a different port by a plain
+# static file server, which makes it a different browser origin even
+# though both sides are on localhost. Scoped to localhost/127.0.0.1
+# origins specifically rather than "*", since there's no reason a
+# non-local page should ever be allowed to call this.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 CROQUIS_DIR = Path(__file__).resolve().parent.parent / "croquis"
 _VISION_MODEL = "claude-sonnet-5"  # swap freely; nothing else depends on the exact id
@@ -53,6 +71,161 @@ def get_anthropic_client() -> Anthropic:
     runs). Overridden in tests with a stub so the vision call never
     actually hits the network or needs a real key."""
     return Anthropic()
+
+
+@pydantic_dataclass
+class CreatePatternRequest:
+    """The Phase 4/6 join point this project didn't have yet: an approved
+    DesignIntent (the croquis review screen's output, once a human has
+    confirmed/corrected it — never applied automatically, see
+    api.main.post_croquis) plus measurements, turned into an actual
+    pattern version 1."""
+    name: str
+    intent: DesignIntent
+    measurements: Measurements
+    croquis_ref: str | None = None
+
+
+@app.post("/patterns")
+def create_pattern(body: CreatePatternRequest, db: sqlite3.Connection = Depends(get_db)) -> dict:
+    """PLAN.md Phase 4 + 6: checks for a reference sloper for this
+    garment_type FIRST (Phase 6) and drafts from its fitted geometry via
+    `draft_bodice_from_sloper` if one exists, falling back to the plain
+    `draft_bodice` formulas otherwise — exactly the choice PLAN.md
+    describes, now with somewhere real to make it. Writes version 1 plus
+    a CROQUIS_DRAFT revision recording which path was used, and embeds
+    that revision immediately (same as /revise) so it's askable right away.
+    """
+    sloper_row = db.execute(
+        "SELECT pattern_id, version FROM reference_slopers WHERE garment_type = ?",
+        (body.intent.garment_type.value,),
+    ).fetchone()
+
+    if sloper_row is not None:
+        sloper_pattern_id, sloper_version = sloper_row
+        sloper_snap = db.execute(
+            "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
+            (sloper_pattern_id, sloper_version),
+        ).fetchone()
+        sloper_pattern = pattern_from_json(sloper_snap[0])
+        pieces = draft_bodice_from_sloper(
+            sloper_pattern.pieces, sloper_pattern.measurements, sloper_pattern.intent,
+            body.measurements, body.intent,
+        )
+        draft_note = f"Drafted from the reference sloper ({sloper_pattern_id} v{sloper_version})."
+    else:
+        pieces = draft_bodice(body.measurements, body.intent)
+        draft_note = "Drafted from the standard formulas (no reference sloper marked for this garment type yet)."
+
+    pattern_id = uuid.uuid4().hex
+    pattern = Pattern(
+        id=pattern_id, name=body.name, version=1,
+        measurements=body.measurements, intent=body.intent, pieces=pieces,
+        croquis_ref=body.croquis_ref,
+    )
+
+    db.execute(
+        "INSERT INTO patterns (id, name, current_version, created_at) VALUES (?, ?, 1, datetime('now'))",
+        (pattern_id, body.name),
+    )
+    db.execute(
+        "INSERT INTO pattern_versions (pattern_id, version, snapshot_json) VALUES (?, 1, ?)",
+        (pattern_id, pattern.to_json()),
+    )
+    revision = Revision(
+        id=uuid.uuid4().hex, pattern_id=pattern_id, version=1, parent_version=None,
+        change_type=ChangeType.OTHER, source=RevisionSource.CROQUIS_DRAFT,
+        deltas=[], reason=draft_note,
+    )
+    db.execute(
+        """
+        INSERT INTO revisions
+            (id, pattern_id, version, parent_version, change_type, source,
+             deltas_json, reason, fit_notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, '[]', ?, '', ?)
+        """,
+        (
+            revision.id, revision.pattern_id, revision.version, revision.parent_version,
+            revision.change_type.value, revision.source.value, revision.reason, revision.created_at,
+        ),
+    )
+    embed_and_store_revision(db, revision)
+    db.commit()
+
+    return pattern.to_dict()
+
+
+@app.get("/patterns")
+def list_patterns(db: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    rows = db.execute(
+        "SELECT id, name, current_version, created_at FROM patterns ORDER BY created_at DESC",
+    ).fetchall()
+    return [
+        {"id": id_, "name": name, "current_version": current_version, "created_at": created_at}
+        for id_, name, current_version, created_at in rows
+    ]
+
+
+@app.get("/patterns/{pattern_id}")
+def get_pattern(pattern_id: str, db: sqlite3.Connection = Depends(get_db)) -> dict:
+    """The pattern's CURRENT version. For a specific older version, see
+    GET /patterns/{id}/versions/{version} below."""
+    row = db.execute("SELECT current_version FROM patterns WHERE id = ?", (pattern_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="pattern not found")
+    return get_pattern_version(pattern_id, row[0], db)
+
+
+@app.get("/patterns/{pattern_id}/versions/{version}")
+def get_pattern_version(pattern_id: str, version: int, db: sqlite3.Connection = Depends(get_db)) -> dict:
+    row = db.execute(
+        "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
+        (pattern_id, version),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="pattern version not found")
+    return pattern_from_json(row[0]).to_dict()
+
+
+@app.get("/patterns/{pattern_id}/versions/{version}/outline")
+def get_pattern_outline(
+    pattern_id: str, version: int, db: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """Flattened geometry for the Phase 7 pattern viewer: curves already
+    walked down to polylines by api.export.geometry's own (tested) math,
+    so the frontend only ever draws straight-line SVG — no bezier/dart/
+    seam-allowance logic duplicated in JS. Two versions' outputs share the
+    same (x, y) millimetre space, so the frontend can overlay them in
+    different colours without any extra alignment step."""
+    row = db.execute(
+        "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
+        (pattern_id, version),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="pattern version not found")
+
+    pattern = pattern_from_json(row[0])
+    pieces = []
+    for piece in pattern.pieces:
+        stitching = piece_outline(piece)
+        cut = offset_polyline(stitching, piece.seam_allowance_mm)
+        grainline = None
+        if piece.grainline is not None:
+            pm = piece.point_map()
+            g0, g1 = pm[piece.grainline.start], pm[piece.grainline.end]
+            grainline = [[g0.x, g0.y], [g1.x, g1.y]]
+        pieces.append({
+            "id": piece.id,
+            "name": piece.name,
+            "cut_count": piece.cut_count,
+            "cut_mirrored": piece.cut_mirrored,
+            "seam_allowance_mm": piece.seam_allowance_mm,
+            "stitching": [[x, y] for x, y in stitching],
+            "cut": [[x, y] for x, y in cut],
+            "darts": [[[ax, ay], [bx, by]] for (ax, ay), (bx, by) in dart_lines(piece)],
+            "grainline": grainline,
+        })
+    return {"pattern_id": pattern_id, "version": version, "pieces": pieces}
 
 
 @app.get("/patterns/{pattern_id}/versions/{version}/pdf")

@@ -378,6 +378,135 @@ def test_get_sloper_422s_for_an_unrecognised_garment_type():
 
 
 # --------------------------------------------------------------------------
+# POST /patterns, GET /patterns, GET /patterns/{id}, GET /patterns/{id}/versions/{v}
+# (Phase 7's join point: the create-a-pattern step the frontend needs, which
+# didn't exist until now even though every later phase assumed it).
+# --------------------------------------------------------------------------
+_NEW_PATTERN_BODY = {
+    "name": "New bodice",
+    "intent": {"garment_type": "bodice", "fabric_class": "woven"},
+    "measurements": {
+        "bust": 920, "waist": 740, "hip": 980, "shoulder_width": 380,
+        "back_length": 400, "bust_height": 240, "bust_span": 180,
+    },
+}
+
+
+def test_create_pattern_drafts_from_standard_formulas_when_no_sloper_is_marked():
+    client, conn, _pattern = _client_with_db()
+
+    response = client.post("/patterns", json=_NEW_PATTERN_BODY)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "New bodice"
+    assert body["version"] == 1
+    piece_ids = {p["id"] for p in body["pieces"]}
+    assert piece_ids == {"bodice_front", "bodice_back"}
+
+    row = conn.execute(
+        "SELECT reason, source FROM revisions WHERE pattern_id = ?", (body["id"],),
+    ).fetchone()
+    assert "standard formulas" in row[0]
+    assert row[1] == "croquis_draft"
+
+
+def test_create_pattern_drafts_from_the_marked_sloper_when_one_exists():
+    client, conn, _pattern = _client_with_db()
+    client.post("/patterns/pat_001/versions/1/mark-sloper")
+
+    response = client.post("/patterns", json=_NEW_PATTERN_BODY)
+
+    assert response.status_code == 200
+    body = response.json()
+    row = conn.execute(
+        "SELECT reason FROM revisions WHERE pattern_id = ?", (body["id"],),
+    ).fetchone()
+    assert "reference sloper" in row[0]
+    assert "pat_001 v1" in row[0]
+
+
+def test_create_pattern_persists_so_it_can_be_fetched_back():
+    client, _conn, _pattern = _client_with_db()
+    created = client.post("/patterns", json=_NEW_PATTERN_BODY).json()
+
+    response = client.get(f"/patterns/{created['id']}")
+
+    assert response.status_code == 200
+    assert response.json() == created
+
+
+def test_list_patterns_returns_every_pattern_newest_first():
+    client, _conn, _pattern = _client_with_db()
+    client.post("/patterns", json=_NEW_PATTERN_BODY)
+
+    response = client.get("/patterns")
+
+    assert response.status_code == 200
+    ids = {row["id"] for row in response.json()}
+    assert "pat_001" in ids
+    assert len(ids) == 2
+
+
+def test_get_pattern_returns_the_current_version():
+    client = _client()
+    response = client.get("/patterns/pat_001")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "pat_001"
+
+
+def test_get_pattern_404s_for_a_missing_pattern():
+    client = _client()
+    response = client.get("/patterns/does_not_exist")
+
+    assert response.status_code == 404
+
+
+def test_get_pattern_version_returns_a_specific_version():
+    client = _client()
+    response = client.get("/patterns/pat_001/versions/1")
+
+    assert response.status_code == 200
+    assert response.json()["version"] == 1
+
+
+def test_get_pattern_version_404s_for_a_missing_version():
+    client = _client()
+    response = client.get("/patterns/pat_001/versions/99")
+
+    assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# GET /patterns/{id}/versions/{v}/outline — flattened geometry for the
+# Phase 7 pattern viewer (plain polylines, curves already walked by
+# api.export.geometry so the frontend never duplicates that math).
+# --------------------------------------------------------------------------
+def test_get_outline_returns_flattened_polylines_for_every_piece():
+    client = _client()
+    response = client.get("/patterns/pat_001/versions/1/outline")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["pattern_id"] == "pat_001"
+    assert body["version"] == 1
+    piece_ids = {p["id"] for p in body["pieces"]}
+    assert piece_ids == {"bodice_front", "bodice_back"}
+    for piece in body["pieces"]:
+        assert len(piece["stitching"]) > 2
+        assert len(piece["cut"]) > 2
+        assert all(len(pt) == 2 for pt in piece["stitching"])
+
+
+def test_get_outline_404s_for_a_missing_version():
+    client = _client()
+    response = client.get("/patterns/pat_001/versions/99/outline")
+
+    assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------
 # POST /croquis (Phase 4 sketch) — isolates CROQUIS_DIR to a pytest tmp_path
 # so tests never write into the real repo's croquis/ folder.
 # --------------------------------------------------------------------------

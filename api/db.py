@@ -29,6 +29,14 @@ def get_connection(path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
     Pass `path=":memory:"` for tests or throwaway scripts.
     """
-    conn = sqlite3.connect(path)
+    # check_same_thread=False: FastAPI's get_db() is a generator dependency,
+    # and anyio's threadpool runs its setup (up to `yield`) and teardown
+    # (conn.close()) as two SEPARATE run_sync calls that aren't guaranteed
+    # the same worker thread — sqlite3's default same-thread check then
+    # raises ProgrammingError the moment two requests land on different
+    # threads and the close() lands on a thread that didn't open the
+    # connection. Each request still gets its own connection, closed once,
+    # so this doesn't introduce real cross-thread sharing.
+    conn = sqlite3.connect(path, check_same_thread=False)
     conn.executescript(DDL)
     return conn
