@@ -486,4 +486,47 @@ CREATE TABLE IF NOT EXISTS reference_slopers (
     marked_at    TEXT NOT NULL,
     FOREIGN KEY (pattern_id, version) REFERENCES pattern_versions(pattern_id, version)
 );
+
+-- PLAN.md Phase 9.1, the "body model": current best known measurements for
+-- one body, as distinct from a pattern version's Measurements snapshot
+-- ("what was true when this version was drafted"). Single user, so in
+-- practice one row, but keyed rather than enforced-singleton so a second
+-- body is a row, not a migration.
+--
+-- Measurements are stored as JSON rather than columns on purpose: the
+-- Measurements dataclass grows a field whenever a new garment type needs
+-- one (CLAUDE.md: "extend as garment types need more"), and a JSON blob
+-- round-trips through the same TypeAdapter the rest of the schema uses
+-- instead of needing a migration per field.
+--
+-- Holds measured body FACTS only. Fit corrections ("needs 4mm more back
+-- shoulder dart") are inferences and live in garment_learnings — mixing
+-- the two is what makes a profile impossible to audit later.
+CREATE TABLE IF NOT EXISTS body_profiles (
+    id                TEXT PRIMARY KEY,
+    measurements_json TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+
+-- PLAN.md Phase 9.2: what past fittings taught us about this body, scoped
+-- by garment type so a dress lesson doesn't silently steer a skirt draft.
+--
+-- Distinct from the revisions table: a revision is "what changed on this
+-- pattern on this date" (a fact); a learning is "what this body needs,
+-- generalised" (an inference). source_revision_id keeps every inference
+-- traceable back to the observation that produced it.
+--
+-- times_confirmed increments when a later fitting produces the same
+-- lesson, so the drafting prompt can rank a repeatedly-confirmed
+-- correction above a one-off.
+CREATE TABLE IF NOT EXISTS garment_learnings (
+    id                 TEXT PRIMARY KEY,
+    garment_type       TEXT NOT NULL,
+    learning           TEXT NOT NULL,
+    source_revision_id TEXT NOT NULL REFERENCES revisions(id),
+    times_confirmed    INTEGER NOT NULL DEFAULT 1,
+    created_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_garment_learnings_type
+    ON garment_learnings(garment_type);
 """

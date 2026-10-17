@@ -522,8 +522,82 @@ def test_get_outline_404s_for_a_missing_version():
 
 
 # --------------------------------------------------------------------------
-# POST /croquis (Phase 4 sketch) — isolates CROQUIS_DIR to a pytest tmp_path
-# so tests never write into the real repo's croquis/ folder.
+# GET/PUT /body-profile and its two hooks (PLAN.md Phase 9.1)
+# --------------------------------------------------------------------------
+def test_get_body_profile_404s_before_anything_is_recorded():
+    client = _client()
+    assert client.get("/body-profile").status_code == 404
+
+
+def test_put_then_get_body_profile_round_trips():
+    client = _client()
+    measurements = dict(_NEW_PATTERN_BODY["measurements"], bust=955)
+
+    put = client.put("/body-profile", json=measurements)
+    assert put.status_code == 200
+    assert put.json()["updated_at"]
+
+    assert client.get("/body-profile").json()["bust"] == 955
+
+
+def test_creating_the_first_pattern_seeds_the_body_profile():
+    client = _client()
+    client.post("/patterns", json=_NEW_PATTERN_BODY)
+
+    assert client.get("/body-profile").json()["bust"] == 920
+
+
+def test_creating_a_later_pattern_does_not_overwrite_the_body_profile():
+    """Drafting someone else's bodice, or a test, must not silently
+    redefine whose body this is."""
+    client = _client()
+    client.post("/patterns", json=_NEW_PATTERN_BODY)
+    client.post("/patterns", json={
+        **_NEW_PATTERN_BODY,
+        "measurements": dict(_NEW_PATTERN_BODY["measurements"], bust=700),
+    })
+
+    assert client.get("/body-profile").json()["bust"] == 920
+
+
+def test_revising_a_measurement_updates_the_body_profile():
+    client, _conn, pattern = _client_with_db()
+    client.put("/body-profile", json=_NEW_PATTERN_BODY["measurements"])
+
+    edited = pattern.to_dict()
+    edited["measurements"]["bust"] = 955
+
+    response = client.post(f"/patterns/{pattern.id}/revise", json={
+        "pattern": edited, "reason": "re-measured after losing the muslin ease",
+    })
+
+    assert response.status_code == 200
+    assert response.json()["body_profile_updated"] == ["bust"]
+    assert client.get("/body-profile").json()["bust"] == 955
+
+
+def test_revising_geometry_alone_leaves_the_body_profile_untouched():
+    client, _conn, pattern = _client_with_db()
+    client.put("/body-profile", json=_NEW_PATTERN_BODY["measurements"])
+
+    edited = pattern.to_dict()
+    edited["pieces"][0]["points"][0]["x"] += 5
+
+    response = client.post(f"/patterns/{pattern.id}/revise", json={
+        "pattern": edited, "reason": "nudged a point",
+    })
+
+    assert response.json()["body_profile_updated"] == []
+    assert client.get("/body-profile").json()["bust"] == 920
+
+
+# --------------------------------------------------------------------------
+# POST /croquis — a plain upload since Phase 9 ("Design intent is
+# author-written"): it stores the sketch and returns a ref, and makes no
+# vision call at all. The sketch reaches a model later, in the drafting
+# step, where it informs geometry rather than deciding what the garment is.
+# CROQUIS_DIR is isolated to a pytest tmp_path so tests never write into
+# the real repo's croquis/ folder.
 # --------------------------------------------------------------------------
 _PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -532,15 +606,10 @@ _PNG_BYTES = (
 )  # smallest possible valid 1x1 PNG, not a real sketch -- just needs to be non-empty bytes
 
 
-def test_croquis_endpoint_stores_the_image_and_returns_a_parsed_intent(tmp_path, monkeypatch):
+def test_croquis_endpoint_stores_the_image_and_returns_its_ref(tmp_path, monkeypatch):
     import api.main as main_module
     monkeypatch.setattr(main_module, "CROQUIS_DIR", tmp_path / "croquis")
-
-    reply = (
-        '{"garment_type": "dress", "fabric_class": "knit", "fit": "relaxed", '
-        '"closures": ["centre_back_zip"], "style_notes": "boat neck, cap sleeves"}'
-    )
-    client, fake = _client_with_vision(reply)
+    client = _client()
 
     response = client.post(
         "/croquis", files={"file": ("sketch.png", _PNG_BYTES, "image/png")},
@@ -548,89 +617,50 @@ def test_croquis_endpoint_stores_the_image_and_returns_a_parsed_intent(tmp_path,
 
     assert response.status_code == 200
     body = response.json()
-    assert body["parse_error"] is None
-    assert body["intent"]["garment_type"] == "dress"
-    assert body["intent"]["fabric_class"] == "knit"
-    assert body["intent"]["fit"] == "relaxed"
-    assert body["intent"]["closures"] == ["centre_back_zip"]
-    assert body["intent"]["style_notes"] == "boat neck, cap sleeves"
-    # untouched defaults the vision prompt was told to leave out
-    assert body["intent"]["ease_bust_mm"] == 50.0
+    assert body["croquis_ref"]
 
     stored = (tmp_path / "croquis").parent / body["croquis_ref"]
     assert stored.exists()
     assert stored.read_bytes() == _PNG_BYTES
 
-    # the image was actually sent to the vision call, not just stored
-    sent_content = fake.last_create_kwargs["messages"][0]["content"]
-    image_block = next(b for b in sent_content if b["type"] == "image")
-    assert image_block["source"]["media_type"] == "image/png"
 
-
-def test_croquis_endpoint_strips_markdown_fences_before_parsing(tmp_path, monkeypatch):
+def test_croquis_endpoint_proposes_no_design_intent(tmp_path, monkeypatch):
+    """The whole point of the Phase 9 reversal: uploading a sketch must not
+    produce garment_type/fit/style guesses for a person to correct. Intent
+    is authored, and a pre-filled field is read far less critically than an
+    empty one."""
     import api.main as main_module
     monkeypatch.setattr(main_module, "CROQUIS_DIR", tmp_path / "croquis")
+    client = _client()
 
-    fenced_reply = '```json\n{"garment_type": "skirt"}\n```'
-    client, _fake = _client_with_vision(fenced_reply)
+    body = client.post(
+        "/croquis", files={"file": ("sketch.png", _PNG_BYTES, "image/png")},
+    ).json()
+
+    assert set(body) == {"croquis_ref"}
+
+
+def test_croquis_endpoint_needs_no_anthropic_client_at_all(tmp_path, monkeypatch):
+    """Storing a sketch makes no LLM call, so it works with no API key and
+    no network — the dependency override is deliberately NOT installed
+    here, and a real Anthropic() would raise if one were constructed."""
+    import api.main as main_module
+    monkeypatch.setattr(main_module, "CROQUIS_DIR", tmp_path / "croquis")
+    app.dependency_overrides.pop(get_anthropic_client, None)
+    client = _client()
 
     response = client.post(
         "/croquis", files={"file": ("sketch.png", _PNG_BYTES, "image/png")},
     )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["parse_error"] is None
-    assert body["intent"]["garment_type"] == "skirt"
-
-
-def test_croquis_endpoint_returns_raw_text_on_a_parse_failure_instead_of_erroring(tmp_path, monkeypatch):
-    """PLAN.md Phase 4: on a parse failure, hand back the raw text for
-    manual correction rather than retrying blindly or failing the whole
-    request -- the image was still stored successfully."""
-    import api.main as main_module
-    monkeypatch.setattr(main_module, "CROQUIS_DIR", tmp_path / "croquis")
-
-    client, _fake = _client_with_vision("Sorry, I can't quite tell what garment this is.")
-
-    response = client.post(
-        "/croquis", files={"file": ("sketch.png", _PNG_BYTES, "image/png")},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["intent"] is None
-    assert body["parse_error"]
-    assert "can't quite tell" in body["raw_response"]
-    # the image was still stored despite the parse failure
-    assert (tmp_path / "croquis").exists()
-    assert len(list((tmp_path / "croquis").iterdir())) == 1
-
-
-def test_croquis_endpoint_returns_raw_text_when_json_is_valid_but_not_a_design_intent(tmp_path, monkeypatch):
-    """Valid JSON that doesn't match DesignIntent's shape (e.g. missing the
-    required garment_type) is exactly as much a parse failure as
-    non-JSON text -- caught by the same path, not a 500."""
-    import api.main as main_module
-    monkeypatch.setattr(main_module, "CROQUIS_DIR", tmp_path / "croquis")
-
-    client, _fake = _client_with_vision('{"not_a_real_field": true}')
-
-    response = client.post(
-        "/croquis", files={"file": ("sketch.png", _PNG_BYTES, "image/png")},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["intent"] is None
-    assert body["parse_error"]
 
 
 def test_croquis_endpoint_400s_for_an_empty_file(tmp_path, monkeypatch):
     import api.main as main_module
     monkeypatch.setattr(main_module, "CROQUIS_DIR", tmp_path / "croquis")
+    client = _client()
 
-    client, _fake = _client_with_vision("{}")
     response = client.post("/croquis", files={"file": ("sketch.png", b"", "image/png")})
 
     assert response.status_code == 400

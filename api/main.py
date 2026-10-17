@@ -23,6 +23,9 @@ from fastapi.responses import Response
 from pydantic import TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
+from api.body_profile import (
+    apply_measurement_deltas, get_profile, save_profile, seed_profile_if_missing,
+)
 from api.db import get_connection
 from api.drafting.bodice import draft_bodice, draft_bodice_from_sloper
 from api.export.geometry import dart_lines, offset_polyline, piece_outline
@@ -53,6 +56,7 @@ app.add_middleware(
 CROQUIS_DIR = Path(__file__).resolve().parent.parent / "croquis"
 _VISION_MODEL = "claude-sonnet-5"  # swap freely; nothing else depends on the exact id
 _design_intent_adapter = TypeAdapter(DesignIntent)
+_measurements_adapter = TypeAdapter(Measurements)
 _revision_adapter = TypeAdapter(Revision)
 _field_delta_list_adapter = TypeAdapter(list[FieldDelta])
 
@@ -84,6 +88,34 @@ class CreatePatternRequest:
     intent: DesignIntent
     measurements: Measurements
     croquis_ref: str | None = None
+
+
+@app.get("/body-profile")
+def get_body_profile(db: sqlite3.Connection = Depends(get_db)) -> dict:
+    """PLAN.md Phase 9.1: the current best known measurements for this body.
+
+    404s when nothing's been recorded yet — a real, distinct state from
+    "recorded, and happens to be empty," and it lets the frontend tell the
+    difference between "measure yourself first" and "here are your numbers."
+    """
+    profile = get_profile(db)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="no body profile recorded yet")
+    return _measurements_adapter.dump_python(profile, mode="json")
+
+
+@app.put("/body-profile")
+def put_body_profile(
+    measurements: Measurements, db: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """Record or correct the body model directly, rather than as a
+    side effect of revising a pattern."""
+    updated_at = save_profile(db, measurements)
+    db.commit()
+    return {
+        "measurements": _measurements_adapter.dump_python(measurements, mode="json"),
+        "updated_at": updated_at,
+    }
 
 
 @app.post("/patterns")
@@ -160,6 +192,10 @@ def create_pattern(body: CreatePatternRequest, db: sqlite3.Connection = Depends(
         ),
     )
     embed_and_store_revision(db, revision)
+    # First pattern seeds the body model (Phase 9.1). Never overwrites an
+    # existing one — correcting the body happens through /revise or
+    # PUT /body-profile, not as a side effect of drafting something new.
+    seed_profile_if_missing(db, body.measurements)
     db.commit()
 
     return pattern.to_dict()
@@ -335,9 +371,16 @@ def revise_pattern(
         ),
     )
     embed_and_store_revision(db, revision)  # same transaction — embedded the moment it exists
+    # Phase 9.1: a revision that changes a measurement changes the body, so
+    # the body model follows. Only measurements.* paths count — a dart
+    # moving in the same edit is a pattern change, not a body change.
+    measurements_updated = apply_measurement_deltas(db, deltas)
     db.commit()
 
-    return _revision_adapter.dump_python(revision, mode="json")
+    return {
+        **_revision_adapter.dump_python(revision, mode="json"),
+        "body_profile_updated": measurements_updated,
+    }
 
 
 @app.get("/patterns/{pattern_id}/revisions")
@@ -516,24 +559,6 @@ def get_sloper(garment_type: GarmentType, db: sqlite3.Connection = Depends(get_d
     }
 
 
-_DESIGN_INTENT_PROMPT = """\
-Look at this croquis sketch of a garment. Respond with ONLY a single JSON \
-object, no prose, no markdown code fences, matching exactly this shape:
-
-{
-  "garment_type": one of "bodice" | "skirt" | "sleeve" | "trouser" | "dress" | "other",
-  "fabric_class": one of "woven" | "stretch_woven" | "knit" (default "woven" if the sketch doesn't make it clear),
-  "fit": one of "fitted" | "semi-fitted" | "relaxed" (default "fitted" if unclear),
-  "closures": a list of short strings naming visible fastenings, e.g. ["centre_back_zip"] (empty list if none are visible),
-  "style_notes": a short free-text description of distinguishing design features you can see \
-(necklines, seam lines, sleeve style, collar, etc.)
-}
-
-Leave out "ease_bust_mm"/"ease_waist_mm"/"ease_hip_mm" entirely unless the sketch clearly implies \
-a looser or closer fit than "fitted" ordinarily means — their defaults are already sensible, \
-and a sketch alone is a poor basis for guessing specific ease numbers.
-"""
-
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n?|\n?```\s*$")
 
 
@@ -549,23 +574,22 @@ def _strip_fences(text: str) -> str:
 
 
 @app.post("/croquis")
-async def post_croquis(
-    file: UploadFile, client: Anthropic = Depends(get_anthropic_client),
-) -> dict[str, Any]:
-    """Phase 4: sketch upload -> a stored image + a DRAFT DesignIntent.
+async def post_croquis(file: UploadFile) -> dict[str, Any]:
+    """Phase 9: sketch upload -> a stored image. Nothing else.
 
-    Never creates a pattern and never applies the intent automatically —
-    PLAN.md is explicit that vision will misread seam lines and style
-    details, and a wrong garment_type would silently send drafting (Phase
-    2, or `draft_bodice_from_sloper` once Phase 6's lookup finds a
-    sloper) down the wrong path. This is strictly a proposal for a human
-    review screen to confirm or correct before anything is drafted.
+    This used to make a vision call that proposed a DesignIntent for a
+    human to correct. That's been reversed deliberately (PLAN.md Phase 9,
+    "Design intent is author-written"): garment type, fabric, fit,
+    closures and style notes are decisions a person makes, and a
+    pre-filled field is far less likely to be read critically than an
+    empty one — the proposal anchors the answer even when it's wrong.
 
-    On a parse failure (the model didn't return valid JSON matching
-    DesignIntent, fences stripped or not), this does NOT retry blindly or
-    500 — PLAN.md's instruction is to hand back the raw text for manual
-    correction instead, since the image itself was still stored
-    successfully; only the proposal needs human help.
+    The sketch is still read by a model, just later and for a different
+    job: it goes into the drafting call (api.drafting.ai_adjust) with the
+    author's own intent, where it informs *geometry* — how deep the
+    neckline really sits, where a seam falls — rather than deciding what
+    the garment is. Storing an image needs no API key, so attaching a
+    croquis works offline.
     """
     image_bytes = await file.read()
     if not image_bytes:
@@ -577,35 +601,4 @@ async def post_croquis(
     stored_path.write_bytes(image_bytes)
     croquis_ref = str(stored_path.relative_to(CROQUIS_DIR.parent))
 
-    response = client.messages.create(
-        model=_VISION_MODEL,
-        max_tokens=1024,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": file.content_type or "image/png",
-                        "data": base64.b64encode(image_bytes).decode("ascii"),
-                    },
-                },
-                {"type": "text", "text": _DESIGN_INTENT_PROMPT},
-            ],
-        }],
-    )
-    raw_text = response.content[0].text if response.content else ""
-    cleaned = _strip_fences(raw_text)
-
-    try:
-        parsed = json.loads(cleaned)
-        intent = DesignIntent(**parsed)
-    except (json.JSONDecodeError, TypeError, ValidationError) as e:
-        return {"croquis_ref": croquis_ref, "intent": None, "parse_error": str(e), "raw_response": raw_text}
-
-    return {
-        "croquis_ref": croquis_ref,
-        "intent": _design_intent_adapter.dump_python(intent, mode="json"),
-        "parse_error": None,
-    }
+    return {"croquis_ref": croquis_ref}

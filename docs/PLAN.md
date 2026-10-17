@@ -30,12 +30,35 @@ muslin, not something to automate.
 
 **2026-10-17 — what's actually left, in priority order:**
 1. **Phase 6's body profile** — its own table/schema, seeded from the full
-   measurement set, distinct from a per-version `Measurements` snapshot.
-2. **Phase 8 (polish)** — not started: backup automation, JSON export with
-   full history, revision tags for muslin rounds.
-3. Validate `POST /croquis` and `POST /patterns/{id}/ask` against the real
+   measurement set, distinct from a per-version `Measurements` snapshot. Now
+   also the first step of Phase 9, where it becomes the "body model."
+2. Validate `POST /croquis` and `POST /patterns/{id}/ask` against the real
    Anthropic API with a real key — everything so far is tested against a
    stub client, and both 500 right now with the `.env` key left empty.
+   Phase 9 depends on this working, so it comes before it.
+3. **Phase 9 (AI-mediated drafting and the learning loop)** — newly specified,
+   not started. This is the phase that makes the flow match the intended one:
+   the AI drafts against the block math, the body model and past garments'
+   learnings, and muslin corrections feed back. Highest-risk phase in the
+   project — it puts a model in the geometry path for the first time. Read its
+   "Limitations and risks" section before starting.
+4. **Phase 8 (polish)** — not started: backup automation, JSON export with
+   full history, revision tags for muslin rounds.
+
+**Note on the current flow vs. the intended one (2026-10-17):** today the AI
+does *not* draft. `POST /patterns` is pure math, the PDF exporter is pure
+rendering, and the RAG layer only answers questions — it never feeds drafting.
+The only thing that carries a fitting correction into a later pattern is the
+manually-marked reference sloper. Phase 9 closes that gap deliberately rather
+than by accident.
+
+The AI is also currently in the **wrong place**: `POST /croquis` makes a vision
+call that writes the design intent, which the person then corrects. Intent is
+meant to be author-written — the model should be called *after* it, not before,
+and should never author it. Phase 9 reverses this: croquis becomes a plain
+upload, intent is typed, and the sketch feeds the drafting call instead. Net
+effect is one AI call per pattern where there are currently two, and it sits
+after every human decision rather than ahead of one.
 
 **2026-10-09:** `api/drafting/bodice.py` (Phase 2's output) was rebuilt
 twice following the inthefolds.com bodice-block tutorial. First pass fixed
@@ -147,6 +170,13 @@ refit, or just offset the flattened polyline and accept it.
 
 **Goal:** sketch upload → `DesignIntent`.
 
+> **Superseded 2026-10-17 — see "Design intent is author-written" below.** The
+> vision-proposes-intent design described in this section was built and tested,
+> but it has the AI authoring design intent, which is explicitly not wanted.
+> Phase 9 replaces it: the croquis is stored as a plain upload, intent is typed
+> by a person, and the sketch becomes *input* to drafting rather than a source
+> of decisions.
+
 - `POST /croquis` accepts an image, stores it, returns a draft `DesignIntent`
 - Vision call to the Anthropic API asking for **strict JSON matching the
   `DesignIntent` schema and nothing else** — no prose, no markdown fences
@@ -228,6 +258,10 @@ from the same generic formulas and the same blind spots every time.
   this phase makes that explicit as its own entity rather than an implicit
   convention, so it stops drifting if patterns are deleted or a garment type
   with different relevant measurements is added.
+- **Still unbuilt.** Phase 9.1 picks this up and gives it a larger role (the
+  "body model" that feeds AI-mediated drafting), including the rule that it
+  holds measured body facts only — fit corrections live in Phase 9.2's
+  garment learnings, not here.
 
 **Reference sloper:**
 - A pattern version explicitly marked via Phase 5's `mark-sloper` endpoint —
@@ -322,6 +356,260 @@ and close a connection on two different threadpool threads).
 
 ---
 
+## Phase 9 — AI-mediated drafting and the learning loop
+
+**Goal:** the flow as specified on 2026-10-17. Croquis and design choices go
+in; the AI drafts against the block math, the body model, and what previous
+garments taught us; a PDF comes out; the muslin's corrections flow back into
+the body model and the learnings, so the next garment starts better than the
+last one.
+
+**What this actually changes.** Today drafting is deterministic — `POST
+/patterns` runs `draft_bodice()` (or `draft_bodice_from_sloper()`) and makes
+no LLM call at all. The AI's entire current role is reading a sketch (`POST
+/croquis`) and explaining history in prose (`POST /{id}/ask`); neither touches
+geometry. This phase puts a model in the drafting path for the first time,
+which is the highest-risk change in the project. Read "Limitations" at the
+bottom before building any of it — several of this project's own invariants
+have to be renegotiated, not quietly broken.
+
+### Design intent is author-written, not AI-written
+
+**The model is called *after* design intent, never before it, and never writes
+it.** Garment type, fabric class, fit, closures and style notes are typed by a
+person. This reverses what Phase 4 built, where `POST /croquis` makes a vision
+call that fills those fields in and the person corrects them afterwards.
+
+Why the reversal is the right call, beyond it being the stated preference: an
+AI-proposed intent that you then edit looks like a time-saver but quietly
+changes who decided. A wrong `garment_type` sends drafting down the wrong path
+entirely, and a pre-filled field is far less likely to be read critically than
+an empty one — the proposal anchors the answer. Design intent is the one part
+of this pipeline that is *pure authorial decision*: there's no body to measure
+and no muslin to check it against, only what you meant to make. That is the
+last thing worth automating.
+
+What this changes concretely:
+
+- `POST /croquis` becomes a **plain upload** — store the image, return
+  `croquis_ref`. No vision call, no `intent`/`parse_error` in the response.
+- The croquis is still *used* by the AI, just later and differently: the image
+  goes into the Phase 9.4 drafting prompt alongside the author-written intent,
+  where it conveys what the text fields can't — how deep the neckline actually
+  sits, where a seam falls, how a sleeve is shaped. Seeing the sketch while
+  proposing geometry is a different act from deciding what the garment is.
+- The Phase 7 "Analyze sketch" button becomes a plain upload control, and the
+  "intent review screen" stops being a review — it's just a form.
+- Pattern creation stops requiring an API key for the *upload* step. Only the
+  9.4 drafting call needs one, and it has a fallback. Useful side effect:
+  attaching a croquis works offline again.
+- `_DESIGN_INTENT_PROMPT`, `_strip_fences`, and the croquis intent-parsing
+  tests are no longer needed for this path. Keep `_strip_fences` — 9.4's JSON
+  response needs the same defensive treatment.
+
+**Recommended shape: the AI proposes deltas, code applies them.** The model
+does *not* emit a coordinate set. It receives a complete, already-valid draft
+from the existing math plus the body model and the learnings, and returns a
+bounded list of adjustments (a point id with dx/dy, or a named dart/ease
+change) that deterministic code applies. Reasons:
+
+- A delta can be range-checked. A regenerated coordinate set can only be
+  re-validated wholesale, which is exactly how Phase 2's armhole passed every
+  automated check while being thirty times too deep.
+- It reuses `FieldDelta` / `diff_patterns` as they already exist, so an AI
+  adjustment has the same shape as a manual one and shows up in the timeline,
+  the diff view and the RAG index with no new machinery.
+- The fallback is free: reject the proposal, ship the formula draft, record
+  why.
+
+The alternative — the model emits the whole `Pattern` JSON — is recorded here
+as considered and rejected, for the reason in the first bullet.
+
+### 9.1 Body model — completes Phase 6's unbuilt half
+
+- `body_profiles` table: one row per profile (realistically one, single user),
+  holding the full `Measurements` field set plus `updated_at`.
+- `GET /body-profile` and `PUT /body-profile`. Seeded from the first pattern
+  created, or entered directly.
+- A revision whose deltas touch `measurements.*` updates the profile — this is
+  the "adjustments update the body model" half of step 5. `infer_change_type`
+  already classifies those paths as `MEASUREMENT`, so the hook is a filter on
+  existing data, not new parsing.
+- The Phase 7 frontend stops defaulting measurements from "the most recent
+  pattern" and reads the profile instead. The current behaviour is a de facto
+  profile; this makes it the real one, so it stops drifting when patterns are
+  deleted.
+- **Scope boundary:** the profile holds *measured body facts*. It does not
+  hold fit corrections ("needs 4mm more back shoulder dart") — those are
+  garment learnings, below. Mixing the two is what makes a profile
+  un-auditable.
+
+### 9.2 Garment learnings
+
+- `garment_learnings` table: `garment_type`, the learning text, the
+  `revision_id` it was derived from, a `confidence` or `times_confirmed`
+  counter, `created_at`.
+- Written when a revision is recorded **and** that revision is credible
+  evidence — see the gating rule in 9.6. Not every edit is a lesson.
+- Distinct from the revision log: a revision is "what changed on this pattern
+  on this date"; a learning is "what this body/this garment type needs,
+  generalised." One is a fact, the other is an inference — keep the row that
+  generated it so the inference can always be traced back.
+
+### 9.3 Garment-type-scoped retrieval
+
+- `retrieve()` currently filters by `pattern_id` **first**, deliberately —
+  cross-pattern bleed is called out in Phase 6 as the obvious failure. For
+  learnings to transfer between garments, drafting needs a second scope:
+  retrieve across patterns sharing a `garment_type`.
+- Add that as an explicit parameter, used **only** by the drafting path.
+  `POST /{id}/ask` keeps pattern-scoped retrieval — asking "why did I change
+  this dart" must never answer from a different garment's history.
+- `patterns` has no `garment_type` column today; it's inside the version
+  snapshot JSON. Either denormalise it onto `patterns` or join through the
+  current version's snapshot. Denormalising is simpler and it never changes
+  after creation.
+
+### 9.4 The AI drafting step
+
+In `POST /patterns`, after the existing sloper-or-formula draft:
+
+1. Build the prompt: the drafted block as structured points, the body model,
+   the retrieved garment learnings, the author-written `DesignIntent`, and the
+   croquis image itself. This is the *only* call in the creation path, and the
+   only place the sketch is interpreted — it informs geometry, never intent.
+2. Ask for a JSON list of proposed adjustments and a one-line reason each.
+   Same strict-JSON + fence-stripping discipline `POST /croquis` already uses.
+3. Validate (9.5). Apply the survivors deterministically.
+4. Record the result as the version-1 `CROQUIS_DRAFT` revision, with the
+   proposal and anything rejected in the reason — so the AI's contribution is
+   visible in the timeline rather than baked invisibly into the geometry.
+
+On any failure — no key, network error, unparseable JSON, failed validation —
+**fall back to the formula draft and say so in the reason.** Drafting must not
+become unavailable because an API call failed.
+
+### 9.5 The validator — the part that makes this safe
+
+The relationship assertions in `tests/test_bodice.py` are currently only test
+code. Promote them to a reusable `api/drafting/validate.py` that both the
+tests and the drafting path call:
+
+- armholes comparable front-to-back; armhole concave, not a bulge or a zigzag
+- total waist width equals waist plus ease minus darts
+- necklines monotonic, meeting the fold with a horizontal tangent
+- dart apexes straddling the bust point; vertical bust line colinear
+- plus a new bound specific to this phase: **no single AI adjustment may move
+  a point more than N mm** (start at 15mm, tune from real use). An adjustment
+  outside the bound is dropped, not clamped — a model asking for a 300mm move
+  is wrong about something, and silently shrinking it hides that.
+
+A proposal that fails validation is rejected wholesale, logged, and the
+formula draft ships. Never partially apply a failed set.
+
+### 9.6 The feedback loop, and what gates it
+
+Step 5 of the described flow says adjustments update the body model and the
+learnings. The body-model half (9.1) is unambiguous — a changed measurement is
+a changed fact. The learnings half needs a gate, because **not every revision
+is evidence**:
+
+- A revision with `source=MUSLIN_FITTING` is a real fitting observation →
+  eligible to become a learning.
+- `MANUAL` and `AI_ADJUST` revisions are design changes or guesses → recorded
+  in history, queryable via `/ask`, but they do **not** become learnings.
+- A learning that appears again in a later fitting increments
+  `times_confirmed`; the prompt orders by that, so a repeatedly-confirmed
+  correction outranks a one-off.
+
+Without this gate, a single speculative edit propagates into every future
+garment with no muslin ever having validated it — which is the exact failure
+CLAUDE.md's "things that need a human" section exists to prevent.
+
+**Done when:** a second garment of the same type, drafted after a first one
+has been fitted and its corrections recorded, visibly starts closer to the
+fitted shape than the formulas alone would produce — *and* the reason on its
+version 1 states which learnings were applied and which proposals were
+rejected.
+
+### Limitations and risks — read before building
+
+1. **LLMs are bad at coordinate geometry.** This isn't speculative here;
+   Phase 2's first armhole was thirty times too deep and passed every check it
+   was given. The delta-not-coordinates design (above) and the 9.5 validator
+   are what make this tolerable. Neither makes it *safe* — they make failures
+   loud instead of silent.
+2. **Drafting becomes non-deterministic — accepted, 2026-10-17.** Same
+   croquis, same body, same learnings → possibly different patterns.
+   **Decision: adaptation over reproducibility.** The reasoning: reproducing a
+   draft exactly is only worth something if the draft was right, and this
+   project's entire premise is that it isn't right until a muslin says so.
+   "Re-run the draft and get the same formula answer back" was never the
+   useful operation; "get a draft that starts closer to the last fitted one"
+   is. What's given up is regenerating a version from its inputs. What makes
+   that survivable is CLAUDE.md's existing invariant that every version is a
+   full stored snapshot — a draft can't be re-derived, but it's never lost.
+   One consequence to carry forward: Phase 8's JSON export stops being a
+   convenience and becomes the only durable copy of a given draft.
+3. **Drafting gains a hard dependency on network and a funded API key.**
+   Today `POST /patterns` is pure local math — no key, no network,
+   milliseconds, free. After 9.4 the good path needs a reachable Anthropic API
+   and a key with credit on it (separate from a Claude subscription). Specifics
+   worth planning for rather than discovering:
+   - **One call per pattern**, at drafting time — the croquis vision call goes
+     away with the author-written-intent change above, and the sketch rides
+     into the drafting call instead. Still seconds rather than milliseconds,
+     and the Phase 7 "Create pattern" button has no pending state today — it
+     needs one, or the tool will look hung.
+   - **Cost is genuinely negligible at this scale.** A few thousand input
+     tokens per pattern, for one person sewing garments by hand. The one item
+     on this list not worth optimising.
+   - **The fallback hides quality variance.** Shipping the formula draft when
+     the call fails keeps the tool working, but two patterns in the timeline
+     can then look like peers when one had learnings applied and one didn't.
+     Recording it in the revision reason is the minimum; the timeline should
+     mark it visually or the difference goes unnoticed.
+   - **Body measurements now leave the machine on every draft.** The drafting
+     prompt carries the body model. Nothing is stored remotely and the repo
+     stays local, but CLAUDE.md's own local-only argument names body
+     measurements as the sensitive thing — so this is a deliberate change to
+     what gets transmitted, not an incidental one. Local data *sovereignty* is
+     kept; local *autonomy* is not.
+   - **The test suite must never require a key.** 137 tests run offline in
+     ~2.6s today. The drafting path gets the same `_FakeAnthropicClient`
+     treatment the croquis tests already use, and the fallback needs its own
+     test: API fails → formula draft ships → the reason says so.
+4. **The purity invariant has to be scoped, not broken.** CLAUDE.md: "drafting
+   functions are pure: (Measurements, DesignIntent) -> list[Point]. No I/O, no
+   database, no API calls. This is what makes them testable." Keep that true —
+   `draft_bodice()` stays pure, and the AI step lives in an orchestration
+   layer above it in `main.py`. If the API call migrates inside the drafting
+   module, the whole test suite's value goes with it.
+5. **Automatic learning sits in tension with "only a muslin knows."** The 9.6
+   gate is the compromise. It's a judgment call, not a solved problem: a
+   fitting observation that was itself mistaken will still propagate.
+6. **Retrieval is lexical, not semantic.** The local hashed bag-of-words
+   embedder (see CLAUDE.md for why it was chosen) matches shared vocabulary.
+   That's a good fit for "why did I widen this dart" in your own words; it's a
+   weaker fit for "find every learning relevant to a garment I haven't made
+   before." Expect misses, and keep `revision_embeddings.model` honest so the
+   method can be swapped without guessing what's stored.
+7. **The measurement-authority invariant still holds.** "Never let the RAG
+   layer be the source of a measurement it reports." Learnings may carry
+   *prose*; every number the drafting step acts on must come from the body
+   model or a structured delta. A learning that says "add 4mm" must resolve
+   that 4mm against a delta, not against the sentence.
+8. **Cross-garment bleed is a new failure mode.** Phase 6 guarded against it
+   by filtering on `pattern_id`. 9.3 deliberately opens that up for drafting.
+   A dress learning reaching a skirt draft is now possible; `garment_type`
+   scoping is the only thing preventing it.
+9. **Marking a sloper stays manual.** This phase does not make the sloper
+   automatic. "Whether a pattern fits" remains a human judgment — the AI now
+   gets more context, but it still never gets to declare the result correct,
+   only generated.
+
+---
+
 ## Suggested session prompts
 
 Phase 2: *"Read CLAUDE.md and docs/PLAN.md. Implement Phase 2 using Aldrich
@@ -334,6 +622,13 @@ before ranking, and make the answer prompt read measurements from
 structured deltas rather than from embedded text. The profile and sloper
 feed Phase 4's drafting step automatically, without an extra confirmation
 step, but the output is still never reported as correct, only generated."*
+
+Phase 9: *"Read CLAUDE.md and docs/PLAN.md, including Phase 9's 'Limitations
+and risks' in full. Build it in order: 9.1 body model, 9.5 validator, then
+9.2/9.3 learnings and scoped retrieval, and only then 9.4's AI drafting step
+— the validator must exist before anything lets a model touch geometry. The
+model proposes bounded deltas, never coordinates; `draft_bodice()` stays
+pure; every failure path falls back to the formula draft and records why."*
 
 ## Ordering notes
 
