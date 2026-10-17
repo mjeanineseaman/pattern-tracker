@@ -23,6 +23,28 @@ load_dotenv()
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "pattern_tracker.db"
 
+# Columns added to tables that already exist in databases out in the wild.
+# `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so a new
+# column in DDL never reaches one — it needs an ALTER. Each entry is
+# (table, column, full ALTER statement); applied only when the column is
+# genuinely absent, so running this repeatedly is safe.
+#
+# Deliberately additive-only. Dropping or retyping a column would need a
+# real migration that also rewrites stored revision deltas (CLAUDE.md:
+# "ids are stable and permanent"), which is a different, much more careful
+# job than this list is for.
+MIGRATIONS: list[tuple[str, str, str]] = [
+    ("patterns", "garment_type", "ALTER TABLE patterns ADD COLUMN garment_type TEXT"),
+]
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    for table, column, statement in MIGRATIONS:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if existing and column not in existing:
+            conn.execute(statement)
+            conn.commit()
+
 
 def get_connection(path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     """Open a SQLite connection with the schema ensured.
@@ -39,4 +61,5 @@ def get_connection(path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     # so this doesn't introduce real cross-thread sharing.
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.executescript(DDL)
+    _apply_migrations(conn)
     return conn

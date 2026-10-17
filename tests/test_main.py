@@ -56,8 +56,9 @@ def _seeded_db():
         pieces=draft_bodice(measurements, intent),
     )
     conn.execute(
-        "INSERT INTO patterns (id, name, current_version, created_at) VALUES (?, ?, ?, datetime('now'))",
-        (pattern.id, pattern.name, pattern.version),
+        "INSERT INTO patterns (id, name, current_version, created_at, garment_type) "
+        "VALUES (?, ?, ?, datetime('now'), ?)",
+        (pattern.id, pattern.name, pattern.version, intent.garment_type.value),
     )
     conn.execute(
         "INSERT INTO pattern_versions (pattern_id, version, snapshot_json) VALUES (?, ?, ?)",
@@ -589,6 +590,69 @@ def test_revising_geometry_alone_leaves_the_body_profile_untouched():
 
     assert response.json()["body_profile_updated"] == []
     assert client.get("/body-profile").json()["bust"] == 920
+
+
+# --------------------------------------------------------------------------
+# Learnings recorded from revisions (PLAN.md Phase 9.2)
+# --------------------------------------------------------------------------
+def _revise(client, pattern, reason, source, fit_notes="", nudge=1.0):
+    edited = pattern.to_dict()
+    edited["pieces"][0]["points"][0]["x"] += nudge
+    return client.post(f"/patterns/{pattern.id}/revise", json={
+        "pattern": edited, "reason": reason, "fit_notes": fit_notes, "source": source,
+    })
+
+
+def test_a_muslin_fitting_revision_records_a_learning():
+    client, conn, pattern = _client_with_db()
+
+    response = _revise(
+        client, pattern,
+        reason="widened the back waist dart",
+        fit_notes="the back pulled across the shoulder blade",
+        source="muslin_fitting",
+    )
+
+    assert response.json()["learning_recorded"]["times_confirmed"] == 1
+    rows = conn.execute("SELECT garment_type, learning FROM garment_learnings").fetchall()
+    assert rows[0][0] == "bodice"
+    assert "shoulder blade" in rows[0][1]
+
+
+def test_a_manual_revision_records_no_learning():
+    """A design change isn't an observation about a body, so it must not
+    propagate into later garments."""
+    client, conn, pattern = _client_with_db()
+
+    response = _revise(client, pattern, reason="raised the neckline for style", source="manual")
+
+    assert response.json()["learning_recorded"] is None
+    assert conn.execute("SELECT COUNT(*) FROM garment_learnings").fetchone() == (0,)
+
+
+def test_patterns_created_before_phase_9_record_no_learning_rather_than_guessing():
+    """_seeded_db inserts pat_001 without a garment_type, standing in for a
+    row written before the column existed."""
+    client, conn, pattern = _client_with_db()
+    conn.execute("UPDATE patterns SET garment_type = NULL WHERE id = ?", (pattern.id,))
+    conn.commit()
+
+    response = _revise(
+        client, pattern, reason="let out the side seam",
+        fit_notes="tight across the ribs", source="muslin_fitting",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["learning_recorded"] is None
+
+
+def test_creating_a_pattern_records_its_garment_type():
+    client, conn, _pattern = _client_with_db()
+
+    created = client.post("/patterns", json=_NEW_PATTERN_BODY).json()
+
+    row = conn.execute("SELECT garment_type FROM patterns WHERE id = ?", (created["id"],)).fetchone()
+    assert row[0] == "bodice"
 
 
 # --------------------------------------------------------------------------

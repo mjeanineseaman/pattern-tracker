@@ -435,11 +435,17 @@ def _infer_width_or_length(deltas: list[FieldDelta]) -> Optional[ChangeType]:
 # SQLite DDL (personal-scale storage)
 # --------------------------------------------------------------------------
 DDL = """
+-- garment_type is denormalised out of the version snapshot's DesignIntent
+-- on purpose (PLAN.md Phase 9.3): scoping a garment's learnings shouldn't
+-- need a join plus a JSON parse on every revision write, and a pattern's
+-- garment type never changes after creation. Nullable because rows written
+-- before Phase 9 predate it; see api.db.MIGRATIONS.
 CREATE TABLE IF NOT EXISTS patterns (
     id            TEXT PRIMARY KEY,
     name          TEXT NOT NULL,
     current_version INTEGER NOT NULL,
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    garment_type  TEXT
 );
 
 -- Full geometry snapshot per version. Cheap at this scale, and means any

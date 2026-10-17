@@ -20,6 +20,42 @@ def test_get_connection_creates_schema():
     } <= tables
 
 
+def test_migrations_add_a_column_to_an_already_existing_table(tmp_path):
+    """CREATE TABLE IF NOT EXISTS is a no-op on an existing table, so a new
+    column in DDL never reaches a database someone already has. Simulates
+    one by creating the pre-Phase-9 patterns table by hand."""
+    import sqlite3
+    from api.db import _apply_migrations
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE patterns (id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+        "current_version INTEGER NOT NULL, created_at TEXT NOT NULL)"
+    )
+    conn.execute("INSERT INTO patterns VALUES ('pat_old', 'before phase 9', 1, 'then')")
+    conn.commit()
+    assert "garment_type" not in {r[1] for r in conn.execute("PRAGMA table_info(patterns)")}
+
+    _apply_migrations(conn)
+
+    assert "garment_type" in {r[1] for r in conn.execute("PRAGMA table_info(patterns)")}
+    # the existing row survives, with the new column simply unset
+    assert conn.execute("SELECT garment_type FROM patterns WHERE id = 'pat_old'").fetchone() == (None,)
+    conn.close()
+
+
+def test_migrations_are_idempotent():
+    conn = get_connection(":memory:")
+    from api.db import _apply_migrations
+
+    _apply_migrations(conn)
+    _apply_migrations(conn)
+
+    columns = [r[1] for r in conn.execute("PRAGMA table_info(patterns)")]
+    assert columns.count("garment_type") == 1
+
+
 def test_connection_can_be_closed_from_a_different_thread():
     """FastAPI's get_db() generator dependency has its setup (up to yield)
     and teardown (conn.close()) run as two separate anyio threadpool calls,

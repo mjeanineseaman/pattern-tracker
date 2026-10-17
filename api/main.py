@@ -28,6 +28,7 @@ from api.body_profile import (
 )
 from api.db import get_connection
 from api.drafting.bodice import draft_bodice, draft_bodice_from_sloper
+from api.learnings import learnings_for, record_learning
 from api.export.geometry import dart_lines, offset_polyline, piece_outline
 from api.export.pdf import render_pattern_pdf
 from api.rag.answer import answer_question
@@ -167,8 +168,9 @@ def create_pattern(body: CreatePatternRequest, db: sqlite3.Connection = Depends(
     )
 
     db.execute(
-        "INSERT INTO patterns (id, name, current_version, created_at) VALUES (?, ?, 1, datetime('now'))",
-        (pattern_id, body.name),
+        "INSERT INTO patterns (id, name, current_version, created_at, garment_type) "
+        "VALUES (?, ?, 1, datetime('now'), ?)",
+        (pattern_id, body.name, body.intent.garment_type.value),
     )
     db.execute(
         "INSERT INTO pattern_versions (pattern_id, version, snapshot_json) VALUES (?, 1, ?)",
@@ -313,10 +315,12 @@ def revise_pattern(
     because an unexplained or no-op revision is invisible to (or actively
     misleading for) the RAG layer that indexes `reason`/`fit_notes` later.
     """
-    row = db.execute("SELECT current_version FROM patterns WHERE id = ?", (pattern_id,)).fetchone()
+    row = db.execute(
+        "SELECT current_version, garment_type FROM patterns WHERE id = ?", (pattern_id,),
+    ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="pattern not found")
-    current_version = row[0]
+    current_version, garment_type = row
 
     snap_row = db.execute(
         "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
@@ -375,11 +379,23 @@ def revise_pattern(
     # the body model follows. Only measurements.* paths count — a dart
     # moving in the same edit is a pattern change, not a body change.
     measurements_updated = apply_measurement_deltas(db, deltas)
+    # Phase 9.2: a muslin fitting is evidence about this body, so it also
+    # becomes a learning for later garments of this type. Manual and
+    # AI-adjust revisions are deliberately not evidence — see api.learnings.
+    # garment_type is None for patterns created before Phase 9 added the
+    # column; those simply don't produce learnings rather than guessing.
+    learning = (
+        record_learning(db, revision, garment_type) if garment_type is not None else None
+    )
     db.commit()
 
     return {
         **_revision_adapter.dump_python(revision, mode="json"),
         "body_profile_updated": measurements_updated,
+        "learning_recorded": (
+            {"id": learning.id, "times_confirmed": learning.times_confirmed}
+            if learning is not None else None
+        ),
     }
 
 
