@@ -327,8 +327,18 @@ linked from the public nav — the portfolio's sewing box / tin shelf item
 still only links to the case-study write-up (`docs/CASE_STUDY.md`), not this
 tool.
 
-- Measurement form and croquis upload — done
-- Intent review screen — editable, since the vision step is a proposal — done
+- Measurement form and croquis upload — done. Measurements come from the
+  body model (9.1), and the five optional ones the bodice draft would
+  otherwise estimate are offered with an inline explanation of what each
+  decides (9.6a).
+- Design intent — author-written, never AI-proposed (see "Design intent is
+  author-written" above) — done
+- "Create pattern" shows a pending state, since drafting now makes an API
+  call — done
+- The timeline tags each draft with whether fitting history was applied,
+  whether it fell back to plain formulas, or whether measurements were
+  estimated — done, so the quality variance 9.4's fallback introduces is
+  visible at a glance rather than buried in the reason text
 - Version timeline with reason and fit notes per entry — done
 - Pattern viewer rendering the SVG, with an overlay mode showing two versions in
   different colours — done (backed by a new `GET /patterns/{id}/versions/{v}/outline`
@@ -488,6 +498,36 @@ In `POST /patterns`, after the existing sloper-or-formula draft:
 On any failure — no key, network error, unparseable JSON, failed validation —
 **fall back to the formula draft and say so in the reason.** Drafting must not
 become unavailable because an API call failed.
+
+### 9.6a Ask for measurements rather than guess them (decided 2026-10-17)
+
+Building 9.4 surfaced a drafting question: with only the seven required
+measurements, the front armhole deepens relative to its chord as the body
+grows (0.269 at bust 920, 0.374 at 1300), because the draft derives
+`armscye_depth`, `back_width`, `neck_circumference` and `nape_to_bust` from
+bust — and falls back to a **flat 12.5cm** for `shoulder_length`, the same
+for every body, which feeds the pivot that places the shoulder tip and so
+shapes the armhole.
+
+**Decision: always use the measurements that are available, and ask for the
+missing ones rather than tune a fallback formula.** Tuning the derivation
+until the output looked plausible is precisely the "averaging remembered
+numbers" CLAUDE.md warns against — it would make the draft look better
+while still being a guess about a body nobody measured. A measurement costs
+one pass with a tape; a guess costs a muslin.
+
+- `api/drafting/needs.py` reports which fields the draft had to estimate,
+  what each one actually decides, how to take it, and what it's being
+  guessed as meanwhile. A fallback that doesn't scale with the body ranks
+  first, since it's equally wrong for every body but one.
+- Surfaced three ways: on the create response, in the version-1 revision
+  reason (so "which numbers were real when this was drafted?" stays
+  answerable six months on), and at `GET /body-profile/needs`.
+- The frontend takes all five as optional inputs and shows the outstanding
+  asks inline.
+- Deliberately *not* done: changing any fallback formula. They stay as the
+  documented defaults they always were; the tool now just says when it's
+  leaning on one.
 
 ### 9.5 The validator — the part that makes this safe
 

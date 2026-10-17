@@ -29,6 +29,7 @@ from api.body_profile import (
 from api.db import get_connection
 from api.drafting.ai_adjust import adjust_draft
 from api.drafting.bodice import draft_bodice, draft_bodice_from_sloper
+from api.drafting.needs import measurement_needs, needs_to_dict
 from api.learnings import learnings_for, record_learning
 from api.export.geometry import dart_lines, offset_polyline, piece_outline
 from api.export.pdf import render_pattern_pdf
@@ -132,6 +133,29 @@ def put_body_profile(
     return {
         "measurements": _measurements_adapter.dump_python(measurements, mode="json"),
         "updated_at": updated_at,
+        "measurement_needs": needs_to_dict(measurement_needs(measurements)),
+    }
+
+
+@app.get("/body-profile/needs")
+def get_body_profile_needs(
+    garment_type: GarmentType = Query(GarmentType.BODICE),
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """Which measurements the draft is currently estimating, worst guess
+    first.
+
+    The alternative to asking is tuning a fallback formula until the output
+    looks plausible, which is exactly the "averaging remembered numbers"
+    CLAUDE.md warns against. A measurement costs one pass with a tape; a
+    guess costs a muslin.
+    """
+    profile = get_profile(db)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="no body profile recorded yet")
+    return {
+        "garment_type": garment_type.value,
+        "needs": needs_to_dict(measurement_needs(profile, garment_type)),
     }
 
 
@@ -200,6 +224,17 @@ def create_pattern(
     pieces = outcome.pieces
     draft_note = f"{draft_note} {outcome.note}"
 
+    # Record what the draft had to estimate, in the revision reason rather
+    # than only in the response — six months on, "which numbers were real
+    # when this was drafted?" is exactly the question the history should be
+    # able to answer about a pattern that didn't fit.
+    needs = measurement_needs(body.measurements, body.intent.garment_type)
+    if needs:
+        draft_note = (
+            f"{draft_note} Estimated (not measured): "
+            f"{', '.join(n.field for n in needs)}."
+        )
+
     pattern_id = uuid.uuid4().hex
     pattern = Pattern(
         id=pattern_id, name=body.name, version=1,
@@ -240,7 +275,11 @@ def create_pattern(
     seed_profile_if_missing(db, body.measurements)
     db.commit()
 
-    return pattern.to_dict()
+    return {
+        **pattern.to_dict(),
+        "draft_note": draft_note,
+        "measurement_needs": needs_to_dict(needs),
+    }
 
 
 @app.get("/patterns")

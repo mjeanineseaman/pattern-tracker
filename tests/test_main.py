@@ -449,7 +449,11 @@ def test_create_pattern_persists_so_it_can_be_fetched_back():
     response = client.get(f"/patterns/{created['id']}")
 
     assert response.status_code == 200
-    assert response.json() == created
+    # draft_note and measurement_needs describe *this drafting run*, not the
+    # stored pattern, so they're on the create response only.
+    stored_fields = {k: v for k, v in created.items()
+                     if k not in ("draft_note", "measurement_needs")}
+    assert response.json() == stored_fields
 
 
 def test_list_patterns_returns_every_pattern_newest_first():
@@ -653,6 +657,69 @@ def test_creating_a_pattern_records_its_garment_type():
 
     row = conn.execute("SELECT garment_type FROM patterns WHERE id = ?", (created["id"],)).fetchone()
     assert row[0] == "bodice"
+
+
+# --------------------------------------------------------------------------
+# Asking for measurements rather than guessing them
+# --------------------------------------------------------------------------
+def test_creating_a_pattern_reports_what_it_had_to_estimate():
+    client, _conn, _pattern = _client_with_db()
+
+    created = client.post("/patterns", json=_NEW_PATTERN_BODY).json()
+
+    fields = [n["field"] for n in created["measurement_needs"]]
+    assert fields[0] == "shoulder_length"  # the fixed guess, asked for first
+    assert "armscye_depth" in fields
+
+
+def test_what_was_estimated_is_recorded_in_the_revision_reason():
+    """Six months on, "which numbers were real when this was drafted?" is
+    exactly what the history should answer about a pattern that didn't fit."""
+    client, conn, _pattern = _client_with_db()
+
+    created = client.post("/patterns", json=_NEW_PATTERN_BODY).json()
+
+    reason = conn.execute(
+        "SELECT reason FROM revisions WHERE pattern_id = ?", (created["id"],),
+    ).fetchone()[0]
+    assert "Estimated (not measured)" in reason
+    assert "shoulder_length" in reason
+
+
+def test_supplying_every_measurement_leaves_nothing_estimated():
+    client, conn, _pattern = _client_with_db()
+    complete = dict(
+        _NEW_PATTERN_BODY["measurements"],
+        shoulder_length=127, armscye_depth=190, back_width=330,
+        nape_to_bust=280, neck_circumference=380,
+    )
+
+    created = client.post(
+        "/patterns", json={**_NEW_PATTERN_BODY, "measurements": complete},
+    ).json()
+
+    assert created["measurement_needs"] == []
+    reason = conn.execute(
+        "SELECT reason FROM revisions WHERE pattern_id = ?", (created["id"],),
+    ).fetchone()[0]
+    assert "Estimated" not in reason
+
+
+def test_body_profile_needs_lists_what_to_measure_next():
+    client = _client()
+    client.put("/body-profile", json=_NEW_PATTERN_BODY["measurements"])
+
+    response = client.get("/body-profile/needs")
+
+    assert response.status_code == 200
+    needs = response.json()["needs"]
+    assert needs[0]["field"] == "shoulder_length"
+    assert needs[0]["how_to_measure"]
+    assert needs[0]["affects"]
+
+
+def test_body_profile_needs_404s_without_a_profile():
+    assert _client().get("/body-profile/needs").status_code == 404
 
 
 # --------------------------------------------------------------------------
