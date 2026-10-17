@@ -4,12 +4,14 @@ The rule being enforced: use every measurement that is available, and ask
 for the missing ones rather than quietly tuning a fallback formula until
 the output looks plausible.
 """
-from api.drafting.needs import measurement_needs, needs_to_dict
+from api.drafting.needs import (
+    DRAFTABLE, measurement_needs, missing_requirements, needs_to_dict,
+    required_measurements,
+)
 from api.schema import GarmentType, Measurements
 
 _REQUIRED = dict(
-    bust=920, waist=740, hip=980, shoulder_width=380,
-    back_length=400, bust_height=240, bust_span=180,
+    bust=920, waist=740, back_length=400, bust_height=240, bust_span=180,
 )
 
 
@@ -81,3 +83,54 @@ def test_needs_serialise_for_the_api():
 
     assert payload[0]["field"] == "shoulder_length"
     assert "how_to_measure" in payload[0]
+
+
+# --------------------------------------------------------------------------
+# Hard requirements per garment type — a blocker, not a quality cost
+# --------------------------------------------------------------------------
+def test_a_bodice_needs_nothing_beyond_the_core_measurements():
+    """A bodice block with no sleeve is a sleeveless top: it needs neither
+    hip nor shoulder_width."""
+    assert missing_requirements(_measurements(), GarmentType.BODICE) == []
+
+
+def test_a_skirt_needs_a_hip_measurement():
+    """hip isn't required by the schema any more, so a skirt has to check
+    for it rather than assume a placeholder is there."""
+    assert missing_requirements(_measurements(), GarmentType.SKIRT) == ["hip"]
+    assert missing_requirements(_measurements(hip=980), GarmentType.SKIRT) == []
+
+
+def test_a_sleeve_needs_shoulder_width():
+    missing = missing_requirements(_measurements(), GarmentType.SLEEVE)
+
+    assert "shoulder_width" in missing
+
+
+def test_a_trouser_needs_hip_and_crotch_depth():
+    missing = missing_requirements(_measurements(), GarmentType.TROUSER)
+
+    assert set(missing) == {"hip", "crotch_depth"}
+
+
+def test_only_the_bodice_is_draftable_today():
+    """Drafting a bodice and labelling it "skirt" would be confidently the
+    wrong garment."""
+    assert DRAFTABLE == {GarmentType.BODICE}
+
+
+def test_every_undraftable_type_still_declares_what_it_will_need():
+    """The dependency is known now even though the drafting isn't written,
+    which is what lets the tool ask for a measurement before it's needed."""
+    for garment_type in (GarmentType.SKIRT, GarmentType.TROUSER,
+                         GarmentType.SLEEVE, GarmentType.DRESS):
+        assert required_measurements(garment_type), garment_type
+
+
+def test_a_requirement_is_not_the_same_as_an_estimated_fallback():
+    """Conflating them would either block drafting over a nice-to-have or
+    let a skirt through with no hip."""
+    bodice_estimates = {n.field for n in measurement_needs(_measurements())}
+    bodice_requirements = set(required_measurements(GarmentType.BODICE))
+
+    assert bodice_estimates & bodice_requirements == set()

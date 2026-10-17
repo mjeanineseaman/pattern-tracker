@@ -88,6 +88,49 @@ _NEEDS_BY_GARMENT: dict[GarmentType, tuple[MeasurementNeed, ...]] = {
 }
 
 
+# What each garment type needs *measured* before it can be drafted at all —
+# distinct from the estimated-fallback list above, which is about quality.
+# These are hard prerequisites: without them there is nothing to draft from.
+#
+# Only the bodice is implemented today, so only its entry is in use. The
+# others are recorded because the dependency is already known — hip for
+# anything below the waist, shoulder_width once a sleeve has to meet an
+# armhole — and knowing it now is what lets the tool ask for a measurement
+# before someone needs it rather than after.
+_REQUIRED_BY_GARMENT: dict[GarmentType, tuple[str, ...]] = {
+    GarmentType.BODICE: ("bust", "waist", "back_length", "bust_span"),
+    GarmentType.SKIRT: ("waist", "hip"),
+    GarmentType.TROUSER: ("waist", "hip", "crotch_depth"),
+    GarmentType.SLEEVE: ("shoulder_width", "arm_length", "upper_arm", "armscye_depth"),
+    GarmentType.DRESS: ("bust", "waist", "back_length", "bust_span", "hip"),
+}
+
+# Garment types the drafting code can actually produce. A bodice block with
+# no sleeve is a sleeveless top — that is the honest extent of what this
+# tool makes today, and saying so is better than offering a dropdown entry
+# that silently drafts a bodice whatever you picked.
+DRAFTABLE: frozenset[GarmentType] = frozenset({GarmentType.BODICE})
+
+
+def required_measurements(garment_type: GarmentType) -> tuple[str, ...]:
+    return _REQUIRED_BY_GARMENT.get(garment_type, ())
+
+
+def missing_requirements(
+    measurements: Measurements, garment_type: GarmentType,
+) -> list[str]:
+    """Measurements this garment type can't be drafted without.
+
+    Separate from `measurement_needs`: a missing requirement is a blocker,
+    a missing need is a quality cost. Conflating them would either block
+    drafting over a nice-to-have or let a skirt be drafted with no hip.
+    """
+    return [
+        field for field in required_measurements(garment_type)
+        if getattr(measurements, field, None) is None
+    ]
+
+
 def measurement_needs(
     measurements: Measurements, garment_type: GarmentType = GarmentType.BODICE,
 ) -> list[MeasurementNeed]:

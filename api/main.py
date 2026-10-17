@@ -29,7 +29,10 @@ from api.body_profile import (
 from api.db import get_connection
 from api.drafting.ai_adjust import adjust_draft
 from api.drafting.bodice import draft_bodice, draft_bodice_from_sloper
-from api.drafting.needs import measurement_needs, needs_to_dict
+from api.drafting.needs import (
+    DRAFTABLE, measurement_needs, missing_requirements, needs_to_dict,
+    required_measurements,
+)
 from api.learnings import learnings_for, record_learning
 from api.export.geometry import dart_lines, offset_polyline, piece_outline
 from api.export.pdf import render_pattern_pdf
@@ -137,6 +140,28 @@ def put_body_profile(
     }
 
 
+@app.get("/garment-types")
+def get_garment_types(db: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    """What can be drafted today, and what each type will need when it can.
+
+    The bodice block with no sleeve is a sleeveless top — that's the honest
+    extent of this tool right now. Reported rather than hardcoded in the UI
+    so the two can't drift apart.
+    """
+    profile = get_profile(db)
+    out = []
+    for garment_type in GarmentType:
+        required = required_measurements(garment_type)
+        missing = missing_requirements(profile, garment_type) if profile else list(required)
+        out.append({
+            "garment_type": garment_type.value,
+            "draftable": garment_type in DRAFTABLE,
+            "requires": list(required),
+            "missing": missing,
+        })
+    return out
+
+
 @app.get("/body-profile/needs")
 def get_body_profile_needs(
     garment_type: GarmentType = Query(GarmentType.BODICE),
@@ -179,6 +204,32 @@ def create_pattern(
        the model's contribution is visible in the timeline rather than
        baked invisibly into the geometry.
     """
+    # Only the bodice block is implemented. Drafting a bodice and labelling
+    # it "skirt" would produce a pattern that is confidently the wrong
+    # garment — refuse instead (CLAUDE.md: never report confident nonsense).
+    if body.intent.garment_type not in DRAFTABLE:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{body.intent.garment_type.value} isn't drafted yet — this tool "
+                f"currently makes bodice blocks (sleeveless tops). When it is, "
+                f"it will need these measurements: "
+                f"{', '.join(required_measurements(body.intent.garment_type))}."
+            ),
+        )
+
+    # A measurement a garment can't be drafted without is a blocker, not a
+    # quality cost — distinct from the estimated-fallback list reported below.
+    missing = missing_requirements(body.measurements, body.intent.garment_type)
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"a {body.intent.garment_type.value} can't be drafted without: "
+                f"{', '.join(missing)}. Measure and add them to your body profile first."
+            ),
+        )
+
     sloper_row = db.execute(
         "SELECT pattern_id, version FROM reference_slopers WHERE garment_type = ?",
         (body.intent.garment_type.value,),

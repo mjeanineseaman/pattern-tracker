@@ -723,6 +723,68 @@ def test_body_profile_needs_404s_without_a_profile():
 
 
 # --------------------------------------------------------------------------
+# What can actually be drafted, and what each type will need
+# --------------------------------------------------------------------------
+def test_drafting_an_unimplemented_garment_type_is_refused():
+    """Drafting a bodice and labelling it "skirt" would be confidently the
+    wrong garment, which is worse than refusing."""
+    client = _client()
+
+    response = client.post("/patterns", json={
+        **_NEW_PATTERN_BODY,
+        "intent": {"garment_type": "skirt", "fabric_class": "woven"},
+    })
+
+    assert response.status_code == 422
+    assert "isn't drafted yet" in response.json()["detail"]
+    assert "hip" in response.json()["detail"]  # says what it'll need when it is
+
+
+def test_the_refusal_names_the_measurements_that_type_will_need():
+    client = _client()
+
+    detail = client.post("/patterns", json={
+        **_NEW_PATTERN_BODY,
+        "intent": {"garment_type": "sleeve", "fabric_class": "woven"},
+    }).json()["detail"]
+
+    assert "shoulder_width" in detail
+    assert "arm_length" in detail
+
+
+def test_a_bodice_drafts_without_hip_or_shoulder_width():
+    """A bodice block with no sleeve is a sleeveless top — neither
+    measurement is involved."""
+    client = _client()
+    body = {**_NEW_PATTERN_BODY}
+    body["measurements"] = {
+        k: v for k, v in body["measurements"].items()
+        if k not in ("hip", "shoulder_width")
+    }
+
+    assert client.post("/patterns", json=body).status_code == 200
+
+
+def test_garment_types_endpoint_reports_what_is_draftable_and_what_is_missing():
+    """The realistic state: a profile measured for bodice work, with hip and
+    shoulder_width genuinely not taken yet."""
+    client = _client()
+    bodice_only = {
+        k: v for k, v in _NEW_PATTERN_BODY["measurements"].items()
+        if k not in ("hip", "shoulder_width")
+    }
+    client.put("/body-profile", json=bodice_only)
+
+    types = {t["garment_type"]: t for t in client.get("/garment-types").json()}
+
+    assert types["bodice"]["draftable"] is True
+    assert types["bodice"]["missing"] == []
+    assert types["skirt"]["draftable"] is False
+    assert "hip" in types["skirt"]["missing"]
+    assert "shoulder_width" in types["sleeve"]["missing"]
+
+
+# --------------------------------------------------------------------------
 # The Phase 9 loop end to end (PLAN.md Phase 9 "Done when")
 # --------------------------------------------------------------------------
 def test_a_second_garment_starts_from_what_the_first_fitting_taught():

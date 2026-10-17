@@ -167,14 +167,22 @@ class PatternPiece:
 # --------------------------------------------------------------------------
 @dataclass
 class Measurements:
-    """Body measurements in mm. Extend as garment types need more."""
+    """Body measurements in mm. Extend as garment types need more.
+
+    Only what the bodice draft actually reads is required. `hip` and
+    `shoulder_width` were required here originally but are read by nothing:
+    hip is needed once skirts and trousers are drafted, shoulder_width once
+    sleeves are. Leaving them required forced a placeholder into every
+    `Measurements`, which then looked like a measured fact in the body
+    profile — see api/drafting/needs.py for which garment type needs what.
+    """
     bust: float
     waist: float
-    hip: float
-    shoulder_width: float
     back_length: float            # nape to waist
     bust_height: float            # shoulder to bust point
     bust_span: float              # apex to apex
+    hip: Optional[float] = None               # skirts/trousers
+    shoulder_width: Optional[float] = None    # sleeves
     arm_length: Optional[float] = None
     upper_arm: Optional[float] = None
     garment_length: Optional[float] = None
