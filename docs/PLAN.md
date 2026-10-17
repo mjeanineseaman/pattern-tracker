@@ -13,22 +13,27 @@ built and tested. Phase 4/6's missing join point is now built too —
 `POST /patterns` checks `GET /slopers/{garment_type}` and drafts from the
 sloper when one's marked, from standard formulas otherwise — and Phase 7's
 frontend exercises it for real, so `draft_bodice_from_sloper()` now does run
-end to end. Still missing: Phase 6's **body profile** (a persistent record
-distinct from a single pattern's `Measurements` snapshot), and defaulting a
-new pattern's measurements from the most recent existing one. Phase 4's
-`POST /croquis` is still only tested against a fake Anthropic client, not the
-real API. Print scale (Phase 3) and fit (Phase 2) still need physical
-verification — a ruler and a muslin, not something to automate.
+end to end. Phase 4's note on defaulting a new pattern's measurements from
+the most recent existing one is also done now — the Phase 7 frontend fetches
+the most recent entry from `GET /patterns` (already sorted newest-first) and
+reads its `.measurements` straight from `GET /patterns/{id}`, a plain local
+lookup against data already on this machine, deliberately **not** routed
+through the RAG/`ask` layer — that layer exists for synthesizing an answer
+over revision *history*, not for sourcing a number as plain as "what did I
+measure last time," which is just sitting in the most recent row. Still
+missing: Phase 6's **body profile** (a persistent record distinct from a
+single pattern's `Measurements` snapshot — see Phase 6 below for why that's
+a different thing from this defaulting). Phase 4's `POST /croquis` is still
+only tested against a fake Anthropic client, not the real API. Print scale
+(Phase 3) and fit (Phase 2) still need physical verification — a ruler and a
+muslin, not something to automate.
 
-**2026-10-14 — what's actually left, in priority order:**
-1. **Default a new pattern's measurements from the most recent existing
-   pattern** (PLAN.md's Phase 4 note) — not implemented; still needs a
-   "most recent pattern" lookup.
-2. **Phase 6's body profile** — its own table/schema, seeded from the full
+**2026-10-17 — what's actually left, in priority order:**
+1. **Phase 6's body profile** — its own table/schema, seeded from the full
    measurement set, distinct from a per-version `Measurements` snapshot.
-3. **Phase 8 (polish)** — not started: backup automation, JSON export with
+2. **Phase 8 (polish)** — not started: backup automation, JSON export with
    full history, revision tags for muslin rounds.
-4. Validate `POST /croquis` and `POST /patterns/{id}/ask` against the real
+3. Validate `POST /croquis` and `POST /patterns/{id}/ask` against the real
    Anthropic API with a real key — everything so far is tested against a
    stub client, and both 500 right now with the `.env` key left empty.
 
@@ -153,7 +158,11 @@ refit, or just offset the flattened polyline and accept it.
 - Don't re-collect body measurements on every croquis upload. Default a new
   pattern's `Measurements` from the most recent existing pattern (single user,
   these rarely change) and let the review screen confirm/adjust before
-  creating version 1 — not a separate measurements endpoint. Measurement
+  creating version 1 — not a separate measurements endpoint. **Done:** the
+  Phase 7 frontend reads it straight off `GET /patterns` (newest-first) +
+  `GET /patterns/{id}`, a plain lookup against existing data — no RAG/`ask`
+  call, which is for synthesizing answers over revision history, not for
+  fetching a value that's just sitting in the most recent row. Measurement
   changes after that go through the normal `POST /patterns/{id}/revise` flow
   (Phase 5) like any other edit — `infer_change_type` already classifies
   `measurements.*` paths as `MEASUREMENT`, so this needs no new machinery.

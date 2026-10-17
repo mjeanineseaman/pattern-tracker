@@ -426,6 +426,21 @@ def test_create_pattern_drafts_from_the_marked_sloper_when_one_exists():
     assert "pat_001 v1" in row[0]
 
 
+def test_create_pattern_500s_if_the_marked_sloper_version_no_longer_exists():
+    """Mirrors GET /slopers/{type}'s own "shouldn't be reachable" guard —
+    nothing in this app deletes pattern versions, but reference_slopers
+    pointing at a snapshot that's gone should 500 clearly, not crash on an
+    unguarded None."""
+    client, conn, _pattern = _client_with_db()
+    client.post("/patterns/pat_001/versions/1/mark-sloper")
+    conn.execute("DELETE FROM pattern_versions WHERE pattern_id = 'pat_001' AND version = 1")
+    conn.commit()
+
+    response = client.post("/patterns", json=_NEW_PATTERN_BODY)
+
+    assert response.status_code == 500
+
+
 def test_create_pattern_persists_so_it_can_be_fetched_back():
     client, _conn, _pattern = _client_with_db()
     created = client.post("/patterns", json=_NEW_PATTERN_BODY).json()

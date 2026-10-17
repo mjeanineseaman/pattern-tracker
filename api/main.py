@@ -107,6 +107,16 @@ def create_pattern(body: CreatePatternRequest, db: sqlite3.Connection = Depends(
             "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
             (sloper_pattern_id, sloper_version),
         ).fetchone()
+        if sloper_snap is None:
+            # Same "shouldn't be reachable" case GET /slopers/{type} already
+            # guards against (see its docstring) — nothing in this app
+            # deletes pattern versions, so this is a clear 500 rather than a
+            # confusing downstream crash the day that invariant breaks.
+            raise HTTPException(
+                status_code=500,
+                detail=f"reference sloper for {body.intent.garment_type.value} points at "
+                       f"{sloper_pattern_id} v{sloper_version}, which no longer exists",
+            )
         sloper_pattern = pattern_from_json(sloper_snap[0])
         pieces = draft_bodice_from_sloper(
             sloper_pattern.pieces, sloper_pattern.measurements, sloper_pattern.intent,
