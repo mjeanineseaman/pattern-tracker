@@ -18,15 +18,28 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from api.export.geometry import flatten_segment
+from api.export.geometry import flatten_segment, piece_outline, polygon_centroid
 from api.schema import PatternPiece, Point
 
 # Tuned from the real construction's own behaviour, as recorded in
 # tests/test_bodice.py. Each one guards a bug that actually happened.
 _ARMHOLE_RATIO_MAX = 1.5        # front vs back armhole length
-_ARMHOLE_BULGE_MIN_MM = 5.0     # a straight line is not an armhole; real draft ~37mm
-_ARMHOLE_BULGE_MAX_MM = 60.0    # the original bug peaked at 81.7mm
-_ARMHOLE_PINCH_RATIO = 1.8      # arc vs its own chord; real draft runs 1.14-1.20
+
+# Bulge is bounded as a FRACTION OF THE CHORD, not in millimetres. Measured
+# across bust 800-1300mm and both rich and minimal measurement sets, the
+# real draft holds steady at 0.24-0.37 while the same curve's absolute
+# deviation ranges 37-134mm — a 3.7x spread. An absolute bound tuned on one
+# body silently rejects correct drafts for every other body.
+_ARMHOLE_BULGE_MIN_RATIO = 0.08
+_ARMHOLE_BULGE_MAX_RATIO = 0.60
+_ARMHOLE_PINCH_RATIO = 1.8      # arc vs its own chord; real draft runs 1.14-1.38
+
+# The armhole must scoop INTO the piece. This is the check that actually
+# guards Phase 2's original bug: that version bulged outward by 0.18-0.32x
+# of chord, which overlaps the correct draft's own 0.24-0.37x magnitude
+# exactly. Size alone cannot tell the two apart — only direction can.
+# Measured concavity on real drafts runs +0.12 to +0.34.
+_ARMHOLE_MIN_CONCAVITY = 0.02
 
 # Real construction produces 2.6-13.5 degrees. The ceiling catches a dart
 # that has become a fan, not normal variation.
@@ -80,9 +93,35 @@ def _max_perpendicular_deviation(poly: list[tuple[float, float]]) -> float:
     return max(abs((x - x0) * dy - (y - y0) * dx) / chord for x, y in poly)
 
 
+def armhole_concavity(piece: PatternPiece) -> float | None:
+    """How far the armhole scoops toward the piece's interior, as a
+    fraction of its own chord. Positive is concave (correct); negative
+    means it bulges outward, which is the Phase 2 bug.
+
+    Measured against the outline's centroid rather than a fixed axis, so
+    it works the same for the front and back piece without either needing
+    to know which way it faces.
+    """
+    poly = _edge_polyline(piece, "armhole")
+    if len(poly) < 3:
+        return None
+    chord = math.dist(poly[0], poly[-1])
+    if chord == 0:
+        return None
+    try:
+        centroid = polygon_centroid(piece_outline(piece))
+    except (KeyError, ZeroDivisionError, IndexError):
+        return None
+
+    curve_mid = poly[len(poly) // 2]
+    chord_mid = ((poly[0][0] + poly[-1][0]) / 2, (poly[0][1] + poly[-1][1]) / 2)
+    return (math.dist(chord_mid, centroid) - math.dist(curve_mid, centroid)) / chord
+
+
 def check_armholes(pieces: list[PatternPiece]) -> list[str]:
-    """Front and back armholes comparable, curved but not wildly, and not
-    pinched back on themselves. All three of these caught real bugs."""
+    """Front and back armholes comparable in length, scooped inward by a
+    sane amount, and not pinched back on themselves. Each of these guards
+    a bug that actually happened."""
     failures: list[str] = []
     lengths: dict[str, float] = {}
 
@@ -91,17 +130,27 @@ def check_armholes(pieces: list[PatternPiece]) -> list[str]:
         if len(poly) < 2:
             continue
         lengths[piece.id] = _polyline_length(poly)
+        chord = math.dist(poly[0], poly[-1])
+        if chord == 0:
+            failures.append(f"{piece.id}: armhole starts and ends at the same place")
+            continue
 
-        bulge = _max_perpendicular_deviation(poly)
-        if not _ARMHOLE_BULGE_MIN_MM < bulge < _ARMHOLE_BULGE_MAX_MM:
+        bulge_ratio = _max_perpendicular_deviation(poly) / chord
+        if not _ARMHOLE_BULGE_MIN_RATIO < bulge_ratio < _ARMHOLE_BULGE_MAX_RATIO:
             failures.append(
-                f"{piece.id}: armhole curve deviates {bulge:.1f}mm from its chord "
-                f"(expected between {_ARMHOLE_BULGE_MIN_MM} and {_ARMHOLE_BULGE_MAX_MM}) — "
+                f"{piece.id}: armhole deviates {bulge_ratio:.2f}x its own chord "
+                f"(expected {_ARMHOLE_BULGE_MIN_RATIO}-{_ARMHOLE_BULGE_MAX_RATIO}) — "
                 f"a straight line or a wild bulge, not an armhole"
             )
 
-        chord = math.dist(poly[0], poly[-1])
-        if chord > 0 and lengths[piece.id] > chord * _ARMHOLE_PINCH_RATIO:
+        concavity = armhole_concavity(piece)
+        if concavity is not None and concavity < _ARMHOLE_MIN_CONCAVITY:
+            failures.append(
+                f"{piece.id}: armhole curves outward ({concavity:+.2f}) instead of scooping "
+                f"into the piece — this is the shape Phase 2 originally got backwards"
+            )
+
+        if lengths[piece.id] > chord * _ARMHOLE_PINCH_RATIO:
             failures.append(
                 f"{piece.id}: armhole arc is {lengths[piece.id] / chord:.2f}x its own chord "
                 f"(limit {_ARMHOLE_PINCH_RATIO}) — the curve is pinched or self-crossing"

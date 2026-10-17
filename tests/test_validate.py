@@ -101,6 +101,55 @@ def test_a_grossly_deepened_armhole_is_caught():
     assert check_armholes(broken)
 
 
+def test_an_outward_bulging_armhole_is_caught():
+    """THE bug. Phase 2's original armhole bulged outward by 0.18-0.32x of
+    chord, which overlaps the correct draft's own 0.24-0.37x magnitude —
+    so a size-only check cannot tell them apart. Mirrors the curve's
+    control points across its chord to flip the direction while leaving
+    the magnitude untouched, and the check must still fire."""
+    pieces = _pieces()
+    piece = next(p for p in pieces if p.id == "bodice_front")
+    armhole = next(e for e in piece.edges if e.id == "armhole")
+    pm = piece.point_map()
+    start, end = pm[armhole.segments[0].start], pm[armhole.segments[-1].end]
+
+    def mirror(pt):
+        """Reflect a control point across the chord from start to end."""
+        ax, ay = start.x, start.y
+        dx, dy = end.x - ax, end.y - ay
+        norm = dx * dx + dy * dy
+        t = ((pt[0] - ax) * dx + (pt[1] - ay) * dy) / norm
+        px, py = ax + t * dx, ay + t * dy
+        return (2 * px - pt[0], 2 * py - pt[1])
+
+    flipped = [
+        dataclasses.replace(s, c1=mirror(s.c1), c2=mirror(s.c2))
+        if s.c1 is not None and s.c2 is not None else s
+        for s in armhole.segments
+    ]
+    broken = [dataclasses.replace(
+        piece, edges=[dataclasses.replace(armhole, segments=flipped) if e.id == "armhole" else e
+                      for e in piece.edges],
+    )]
+
+    assert any("curves outward" in f for f in check_armholes(broken))
+
+
+def test_armhole_checks_hold_across_body_sizes():
+    """The bulge bound is a fraction of the chord, not millimetres: the
+    same curve's absolute deviation ranges 37-134mm across these bodies
+    while its chord ratio barely moves. An absolute bound tuned on one
+    body rejects correct drafts for every other one."""
+    intent = DesignIntent(GarmentType.BODICE, FabricClass.WOVEN)
+    for bust in (800.0, 920.0, 1100.0, 1300.0):
+        measurements = Measurements(
+            bust=bust, waist=bust - 180, hip=bust + 60, shoulder_width=380,
+            back_length=400, bust_height=240, bust_span=180,
+        )
+        pieces = draft_bodice(measurements, intent)
+        assert check_armholes(pieces) == [], f"bust={bust} should draft a valid armhole"
+
+
 def test_a_dart_opened_into_a_fan_is_caught():
     """Real darts open 2.6-13.5 degrees at the apex. Swinging a leg right
     around turns the wedge into a fan."""

@@ -656,6 +656,90 @@ def test_creating_a_pattern_records_its_garment_type():
 
 
 # --------------------------------------------------------------------------
+# The Phase 9 loop end to end (PLAN.md Phase 9 "Done when")
+# --------------------------------------------------------------------------
+def test_a_second_garment_starts_from_what_the_first_fitting_taught():
+    """The whole point of Phase 9: draft, fit, record what the muslin did,
+    and the next garment of that type starts adjusted rather than from the
+    formulas alone — with the reason saying exactly what was applied."""
+    reply = (
+        '[{"piece": "bodice_back", "point": "cb_neck", "dx": 0, "dy": 4, '
+        '"reason": "back pulled across the shoulder blade last time"}]'
+    )
+    client, conn, pattern, _fake = _client_with_db_and_vision(reply)
+
+    # a real fitting on the first pattern becomes a learning
+    edited = pattern.to_dict()
+    edited["pieces"][0]["points"][0]["x"] += 2
+    client.post(f"/patterns/{pattern.id}/revise", json={
+        "pattern": edited,
+        "reason": "widened the back waist dart",
+        "fit_notes": "the back pulled across the shoulder blade",
+        "source": "muslin_fitting",
+    })
+    assert conn.execute("SELECT COUNT(*) FROM garment_learnings").fetchone() == (1,)
+
+    # the next bodice is drafted with that learning in hand
+    created = client.post("/patterns", json=_NEW_PATTERN_BODY).json()
+
+    reason = conn.execute(
+        "SELECT reason FROM revisions WHERE pattern_id = ?", (created["id"],),
+    ).fetchone()[0]
+    assert "Adjusted from fitting history" in reason
+    assert "shoulder blade" in reason
+
+    # and the geometry really did move
+    plain = draft_bodice(pattern.measurements, pattern.intent)
+    plain_cb_neck = next(
+        p for p in next(x for x in plain if x.id == "bodice_back").points if p.id == "cb_neck"
+    )
+    created_cb_neck = next(
+        p for p in next(x for x in created["pieces"] if x["id"] == "bodice_back")["points"]
+        if p["id"] == "cb_neck"
+    )
+    assert created_cb_neck["y"] == plain_cb_neck.y + 4
+
+
+def test_a_first_garment_is_drafted_without_calling_the_model_at_all():
+    """No fitting history means nothing to apply, so Phase 9.4
+    short-circuits rather than spending a call to be told nothing."""
+    client, _conn, _pattern, fake = _client_with_db_and_vision("[]")
+
+    created = client.post("/patterns", json=_NEW_PATTERN_BODY).json()
+
+    assert fake.last_create_kwargs is None
+    assert created["pieces"]
+
+
+def test_creation_still_succeeds_when_the_model_call_fails():
+    """Drafting must not become unavailable because an API call did."""
+    client, conn, pattern = _client_with_db()
+
+    class _ExplodingClient:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                raise RuntimeError("Could not resolve authentication method")
+
+    app.dependency_overrides[get_anthropic_client] = lambda: _ExplodingClient()
+
+    edited = pattern.to_dict()
+    edited["pieces"][0]["points"][0]["x"] += 2
+    client.post(f"/patterns/{pattern.id}/revise", json={
+        "pattern": edited, "reason": "let out the side seam",
+        "fit_notes": "tight across the ribs", "source": "muslin_fitting",
+    })
+
+    response = client.post("/patterns", json=_NEW_PATTERN_BODY)
+
+    assert response.status_code == 200
+    reason = conn.execute(
+        "SELECT reason FROM revisions WHERE pattern_id = ?", (response.json()["id"],),
+    ).fetchone()[0]
+    assert "the adjustment step failed" in reason
+
+
+# --------------------------------------------------------------------------
 # POST /croquis — a plain upload since Phase 9 ("Design intent is
 # author-written"): it stores the sketch and returns a ref, and makes no
 # vision call at all. The sketch reaches a model later, in the drafting

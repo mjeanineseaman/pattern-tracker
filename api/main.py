@@ -27,6 +27,7 @@ from api.body_profile import (
     apply_measurement_deltas, get_profile, save_profile, seed_profile_if_missing,
 )
 from api.db import get_connection
+from api.drafting.ai_adjust import adjust_draft
 from api.drafting.bodice import draft_bodice, draft_bodice_from_sloper
 from api.learnings import learnings_for, record_learning
 from api.export.geometry import dart_lines, offset_polyline, piece_outline
@@ -68,6 +69,21 @@ def get_db() -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
+
+
+def _croquis_path(croquis_ref: str | None) -> Path | None:
+    """Resolve a stored croquis ref to a real path, refusing anything that
+    escapes CROQUIS_DIR. The ref comes back from POST /croquis, but it
+    arrives here as an ordinary client-supplied string, so it's treated as
+    untrusted input rather than trusted because of where it usually
+    originates."""
+    if not croquis_ref:
+        return None
+    root = CROQUIS_DIR.resolve()
+    candidate = (CROQUIS_DIR.parent / croquis_ref).resolve()
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        return None
+    return candidate
 
 
 def get_anthropic_client() -> Anthropic:
@@ -120,14 +136,24 @@ def put_body_profile(
 
 
 @app.post("/patterns")
-def create_pattern(body: CreatePatternRequest, db: sqlite3.Connection = Depends(get_db)) -> dict:
-    """PLAN.md Phase 4 + 6: checks for a reference sloper for this
-    garment_type FIRST (Phase 6) and drafts from its fitted geometry via
-    `draft_bodice_from_sloper` if one exists, falling back to the plain
-    `draft_bodice` formulas otherwise — exactly the choice PLAN.md
-    describes, now with somewhere real to make it. Writes version 1 plus
-    a CROQUIS_DRAFT revision recording which path was used, and embeds
-    that revision immediately (same as /revise) so it's askable right away.
+def create_pattern(
+    body: CreatePatternRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    client: Anthropic = Depends(get_anthropic_client),
+) -> dict:
+    """PLAN.md Phase 4 + 6 + 9.4. Three steps, in order:
+
+    1. Deterministic draft — from a marked reference sloper's fitted
+       geometry if one exists for this garment type, otherwise from the
+       standard formulas.
+    2. AI adjustment (Phase 9.4) — the model applies what previous muslin
+       fittings taught us about this body, as bounded point deltas. Every
+       failure path falls back to step 1's draft, so this never makes
+       drafting unavailable.
+    3. Write version 1 plus a CROQUIS_DRAFT revision whose reason records
+       which path was taken and what, if anything, the model changed —
+       the model's contribution is visible in the timeline rather than
+       baked invisibly into the geometry.
     """
     sloper_row = db.execute(
         "SELECT pattern_id, version FROM reference_slopers WHERE garment_type = ?",
@@ -159,6 +185,20 @@ def create_pattern(body: CreatePatternRequest, db: sqlite3.Connection = Depends(
     else:
         pieces = draft_bodice(body.measurements, body.intent)
         draft_note = "Drafted from the standard formulas (no reference sloper marked for this garment type yet)."
+
+    # Phase 9.4. Learnings come from muslin fittings only (api.learnings),
+    # so with no fitting history this short-circuits without an API call.
+    garment_type = body.intent.garment_type.value
+    outcome = adjust_draft(
+        client,
+        pieces,
+        body.measurements,
+        body.intent,
+        [l.learning for l in learnings_for(db, garment_type)],
+        croquis_path=_croquis_path(body.croquis_ref),
+    )
+    pieces = outcome.pieces
+    draft_note = f"{draft_note} {outcome.note}"
 
     pattern_id = uuid.uuid4().hex
     pattern = Pattern(
