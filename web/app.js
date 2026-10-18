@@ -102,7 +102,8 @@ async function loadPatternList() {
     const li = document.createElement("li");
     const btn = document.createElement("button");
     btn.className = "pattern-list__item" + (p.id === state.currentPatternId ? " active" : "");
-    btn.innerHTML = `${escapeHtml(p.name)}<small>v${p.current_version} — ${escapeHtml(p.id)}</small>`;
+    btn.dataset.patternId = p.id;  // the id itself is never shown — see openPattern()
+    btn.innerHTML = `${escapeHtml(p.name)}<small>v${p.current_version}</small>`;
     btn.addEventListener("click", () => openPattern(p.id));
     li.appendChild(btn);
     ul.appendChild(li);
@@ -386,7 +387,7 @@ async function openPattern(patternId) {
   showView("pattern");
   renderPatternListActive();
   for (const btn of document.querySelectorAll(".pattern-list__item")) {
-    if (btn.textContent.includes(patternId)) btn.classList.add("active");
+    if (btn.dataset.patternId === patternId) btn.classList.add("active");
   }
 
   let pattern, revisions;
@@ -404,7 +405,7 @@ async function openPattern(patternId) {
 
   el("pattern-title").textContent = pattern.name;
   el("pattern-meta").textContent =
-    `${pattern.id} — current version ${pattern.version} — ${pattern.intent.garment_type}, ${pattern.intent.fabric_class}`;
+    `Version ${pattern.version} — ${pattern.intent.garment_type}, ${pattern.intent.fabric_class}`;
 
   el("overlay-toggle").checked = false;
   el("overlay-version-wrap").hidden = true;
