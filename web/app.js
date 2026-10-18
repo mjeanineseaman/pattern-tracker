@@ -504,36 +504,79 @@ function renderDiffList(diff) {
   diffList.innerHTML = `<p class="hint">Changes from v${diff.from} to v${diff.to}:</p><ul>${items}</ul>`;
 }
 
-function buildOutlineSvg(layers) {
-  // Shared bounding box across every layer/piece so an overlay of two
-  // versions never clips either one and both share one coordinate space.
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+// Every piece comes back from the API in its own drafting-local space —
+// api/drafting/bodice.py anchors each piece's own origin point (cb_neck,
+// for the back) at (0, 0) regardless of measurements, the same way every
+// pattern piece does on paper. Drawn raw, bodice_front and bodice_back
+// would sit on top of each other. api/export/pdf.py already solves this
+// for print (_layout_pieces, left-to-right with a 20mm gap); this mirrors
+// that same idea for the on-screen viewer, since the problem and the fix
+// are identical — it's placement, not geometry, so no curve math is
+// duplicated here, matching why /outline exists in the first place.
+//
+// For an overlay, the two versions of ONE piece must share the exact same
+// offset rather than each being independently centred — centring each
+// layer on its own bounding box would erase real differences (a dart
+// that grew would re-shift the whole piece to compensate) instead of
+// showing them. Because every piece already shares one fixed anatomical
+// origin across versions, one offset per piece id, reused for every
+// layer, keeps that alignment true: same piece overlays for comparison,
+// different pieces sit side by side.
+function layoutPieces(layers) {
+  const pieceIds = [];
+  const seen = new Set();
   for (const { outline } of layers) {
     for (const piece of outline.pieces) {
+      if (!seen.has(piece.id)) { seen.add(piece.id); pieceIds.push(piece.id); }
+    }
+  }
+
+  const margin = 20;
+  const gap = 20; // matches api/export/pdf.py's _PIECE_GAP_MM
+  const offsets = {};
+  let cursorX = margin;
+  let maxBottom = 0;
+
+  for (const pieceId of pieceIds) {
+    // Union bounding box across every layer that has this piece, so the
+    // slot fits whichever version is larger.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const { outline } of layers) {
+      const piece = outline.pieces.find((p) => p.id === pieceId);
+      if (!piece) continue;
       for (const [x, y] of piece.cut) {
         minX = Math.min(minX, x); minY = Math.min(minY, y);
         maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
       }
     }
+    const dx = cursorX - minX, dy = margin - minY;
+    offsets[pieceId] = { dx, dy };
+    cursorX += (maxX - minX) + gap;
+    maxBottom = Math.max(maxBottom, maxY + dy);
   }
-  if (!isFinite(minX)) return `<p class="hint">No geometry to show.</p>`;
-  const margin = 20;
-  minX -= margin; minY -= margin; maxX += margin; maxY += margin;
-  const width = maxX - minX, height = maxY - minY;
 
-  const toPoints = (poly) => poly.map(([x, y]) => `${(x - minX).toFixed(1)},${(y - minY).toFixed(1)}`).join(" ");
+  return { offsets, width: cursorX - gap + margin, height: maxBottom + margin };
+}
+
+function buildOutlineSvg(layers) {
+  const hasGeometry = layers.some(({ outline }) => outline.pieces.length > 0);
+  if (!hasGeometry) return `<p class="hint">No geometry to show.</p>`;
+
+  const { offsets, width, height } = layoutPieces(layers);
+  const shift = (poly, off) => poly.map(([x, y]) => `${(x + off.dx).toFixed(1)},${(y + off.dy).toFixed(1)}`).join(" ");
 
   let body = "";
   for (const { outline, color } of layers) {
     for (const piece of outline.pieces) {
-      body += `<polygon points="${toPoints(piece.cut)}" fill="none" stroke="${color}" stroke-width="1" stroke-dasharray="4,2" opacity="0.6"/>`;
-      body += `<polygon points="${toPoints(piece.stitching)}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
+      const off = offsets[piece.id];
+      body += `<polygon points="${shift(piece.cut, off)}" fill="none" stroke="${color}" stroke-width="1" stroke-dasharray="4,2" opacity="0.6"/>`;
+      body += `<polygon points="${shift(piece.stitching, off)}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
       for (const [a, b] of piece.darts) {
-        body += `<line x1="${(a[0] - minX).toFixed(1)}" y1="${(a[1] - minY).toFixed(1)}" x2="${(b[0] - minX).toFixed(1)}" y2="${(b[1] - minY).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="2,1"/>`;
+        body += `<line x1="${(a[0] + off.dx).toFixed(1)}" y1="${(a[1] + off.dy).toFixed(1)}" x2="${(b[0] + off.dx).toFixed(1)}" y2="${(b[1] + off.dy).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="2,1"/>`;
       }
       if (piece.grainline) {
         const [g0, g1] = piece.grainline;
-        body += `<line x1="${(g0[0] - minX).toFixed(1)}" y1="${(g0[1] - minY).toFixed(1)}" x2="${(g1[0] - minX).toFixed(1)}" y2="${(g1[1] - minY).toFixed(1)}" stroke="${color}" stroke-width="1" opacity="0.7"/>`;
+        body += `<line x1="${(g0[0] + off.dx).toFixed(1)}" y1="${(g0[1] + off.dy).toFixed(1)}" x2="${(g1[0] + off.dx).toFixed(1)}" y2="${(g1[1] + off.dy).toFixed(1)}" stroke="${color}" stroke-width="1" opacity="0.7"/>`;
       }
     }
   }
