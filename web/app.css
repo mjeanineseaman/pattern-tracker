@@ -1,0 +1,455 @@
+/* ============================================================
+   Pattern Tracker's local tool UI.
+
+   The palette and the Cinzel/EB Garamond/Poppins pairing are taken from
+   the portfolio site, so the two still read as one project — but the
+   values are declared here rather than imported from that repo. This app
+   lives in pattern-tracker and has to stand alone: a stylesheet reaching
+   across into ../homepage would break the moment the repos sit anywhere
+   but side by side.
+
+   Only the tokens this UI actually uses are kept. The portfolio's full
+   illustration palette stays where it belongs.
+   ============================================================ */
+
+:root{
+  --page-bg:#aeb194;
+
+  --ink:#221f1e;
+  --note:#8d8378;
+  --cream:#f3ead9;
+  --bone:#e6d9c2;
+  --sand:#d9c9a8;
+  --gold:#c8a35c;
+
+  /* accents: overlay colours, status, and the needs/learning callouts */
+  --indigo:#4a46c8;   /* "before" version in the overlay viewer */
+  --rust:#b25f38;     /* "after" version, and required-field marks */
+  --moss:#8b944e;     /* connected, and drafts that used fitting history */
+  --tomato:#c0453c;   /* API unreachable */
+  --clay:#c07f68;     /* estimated-measurement callouts */
+  --blush:#eccbc5;    /* banner fill */
+  --rose:#d3a099;     /* banner border */
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  min-height:100vh;
+  background:var(--page-bg);
+  font-family:"EB Garamond","Garamond",Georgia,serif;
+  color:var(--ink);
+}
+
+input,select,textarea,button{font-family:"Poppins",sans-serif;font-size:.85rem}
+
+.shell{
+  max-width:64rem;
+  margin:0 auto;
+  padding:1.6rem 1rem 3rem;
+}
+
+/* ----------------------------- header ----------------------------- */
+
+.shell__header{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:1rem;
+  flex-wrap:wrap;
+  margin-bottom:1.2rem;
+}
+
+.shell__title{
+  font-family:"Cinzel",Georgia,serif;
+  font-weight:700;
+  font-size:clamp(1.4rem, 3vw, 1.8rem);
+  letter-spacing:.02em;
+  margin:0;
+  color:var(--ink);
+}
+
+.shell__kicker{
+  font-style:italic;
+  color:var(--note);
+  font-size:.85rem;
+  margin:.3rem 0 0;
+  max-width:34rem;
+}
+
+.api-base{
+  display:flex;
+  align-items:center;
+  gap:.4rem;
+  font-size:.78rem;
+}
+.api-base label{color:var(--note)}
+.api-base input{
+  width:11.5rem;
+  padding:.3rem .5rem;
+  border:.06rem solid var(--sand);
+  border-radius:.3rem;
+  background:var(--cream);
+  color:var(--ink);
+}
+.api-status{
+  width:.6rem;height:.6rem;border-radius:50%;
+  background:var(--sand);
+  display:inline-block;
+}
+.api-status.ok{background:var(--moss)}
+.api-status.down{background:var(--tomato)}
+
+/* ----------------------------- banner ----------------------------- */
+
+.banner{
+  background:var(--blush);
+  color:#5a2a24;
+  border:.06rem solid var(--rose);
+  border-radius:.4rem;
+  padding:.6rem .9rem;
+  margin-bottom:1rem;
+  font-size:.85rem;
+}
+
+/* ------------------------------ body ------------------------------ */
+
+.shell__body{
+  display:grid;
+  grid-template-columns:14rem 1fr;
+  gap:1.2rem;
+  align-items:start;
+}
+
+@media (max-width:720px){
+  .shell__body{grid-template-columns:1fr}
+}
+
+.pattern-list{
+  background:var(--cream);
+  border:.06rem solid var(--sand);
+  border-radius:.5rem;
+  padding:.9rem;
+  position:sticky;
+  top:1rem;
+}
+
+.pattern-list__heading{
+  font-family:"Cinzel",Georgia,serif;
+  font-size:.75rem;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  color:var(--note);
+  margin:.9rem 0 .5rem;
+}
+
+.pattern-list__items{
+  list-style:none;
+  margin:0;padding:0;
+  display:flex;
+  flex-direction:column;
+  gap:.3rem;
+}
+
+.pattern-list__item{
+  display:block;
+  width:100%;
+  text-align:left;
+  padding:.5rem .6rem;
+  border-radius:.35rem;
+  border:.06rem solid transparent;
+  background:none;
+  color:var(--ink);
+  cursor:pointer;
+}
+.pattern-list__item:hover{background:var(--bone)}
+.pattern-list__item.active{
+  background:var(--gold);
+  color:var(--ink);
+  border-color:#8a661f;
+}
+.pattern-list__item small{display:block;color:var(--note);font-size:.72rem}
+.pattern-list__item.active small{color:#4a3a14}
+
+.pattern-list__empty{color:var(--note);font-size:.8rem;font-style:italic}
+
+/* ---------------------------- workspace ---------------------------- */
+
+.workspace{min-width:0}
+
+.view__title{
+  font-family:"Cinzel",Georgia,serif;
+  font-weight:600;
+  font-size:1.15rem;
+  margin:0 0 .9rem;
+  color:var(--ink);
+}
+
+.placeholder{
+  color:var(--note);
+  font-style:italic;
+  padding:2rem 1rem;
+  text-align:center;
+}
+
+.card{
+  background:var(--cream);
+  border:.06rem solid var(--sand);
+  border-radius:.5rem;
+  padding:1rem 1.1rem;
+  margin-bottom:1.1rem;
+}
+
+/* A <fieldset> gets its legend's default caption behaviour: the browser
+   straddles the legend across the fieldset's own top border no matter what
+   CSS the legend itself carries. Rather than fight that, the border/fill
+   move to an inner .card__body — the fieldset itself stays borderless, so
+   the legend renders as a plain heading sitting above the cream box, never
+   overlapping it. */
+fieldset.card{
+  background:none;
+  border:none;
+  padding:0;
+}
+.card__legend{
+  font-family:"Cinzel",Georgia,serif;
+  font-weight:600;
+  font-size:.85rem;
+  letter-spacing:.04em;
+  color:var(--ink);
+  padding:0;
+  margin-bottom:.5rem;
+}
+.card__body{
+  background:var(--cream);
+  border:.06rem solid var(--sand);
+  border-radius:.5rem;
+  padding:1rem 1.1rem;
+}
+.card__title{
+  font-family:"Cinzel",Georgia,serif;
+  font-weight:600;
+  font-size:.9rem;
+  margin:0;
+  color:var(--ink);
+}
+
+.hint{color:var(--note);font-size:.78rem;margin:.4rem 0}
+
+.row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+.row--end{justify-content:flex-end}
+.row--split{justify-content:space-between;align-items:center;margin-bottom:.6rem}
+
+.grid{display:grid;gap:.7rem;margin-top:.6rem}
+.grid--2{grid-template-columns:repeat(2, minmax(10rem,1fr))}
+.grid--3{grid-template-columns:repeat(3, minmax(7rem,1fr))}
+@media (max-width:560px){
+  .grid--2,.grid--3{grid-template-columns:1fr}
+}
+
+label{display:flex;flex-direction:column;gap:.25rem;font-size:.78rem;color:var(--note)}
+label.block{display:flex;margin-top:.6rem}
+label.checkbox{flex-direction:row;align-items:center;gap:.4rem}
+
+input[type=text],input[type=number],input[type=file],select,textarea{
+  padding:.4rem .5rem;
+  border:.06rem solid var(--sand);
+  border-radius:.3rem;
+  background:#fff;
+  color:var(--ink);
+}
+textarea{resize:vertical;font-family:"EB Garamond",Georgia,serif}
+
+.required{color:var(--rust);font-style:italic;font-weight:400}
+
+.measurements__for{
+  font-size:.66rem;
+  font-style:italic;
+  color:var(--note);
+  margin-top:-.15rem;
+}
+
+.measurements__subhead{
+  font-family:"Cinzel",Georgia,serif;
+  font-size:.7rem;
+  letter-spacing:.09em;
+  text-transform:uppercase;
+  color:var(--note);
+  margin:1.1rem 0 0;
+}
+
+/* "Use what's available, ask for the rest rather than guess." Framed as a
+   request with instructions, not a validation error — nothing here is
+   wrong, it's just estimated. */
+.needs{
+  margin-top:.9rem;
+  padding:.7rem .9rem;
+  background:var(--bone);
+  border-left:.2rem solid var(--clay);
+  border-radius:0 .35rem .35rem 0;
+}
+.needs__lead{font-size:.78rem;margin:0 0 .5rem;color:var(--ink)}
+.needs__list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.5rem}
+.needs__list li{display:flex;flex-direction:column;gap:.1rem}
+.needs__field{
+  font-family:"Poppins",sans-serif;
+  font-size:.76rem;
+  font-weight:600;
+  color:var(--ink);
+  text-transform:capitalize;
+}
+.needs__affects{font-size:.74rem;color:var(--ink)}
+.needs__how{font-size:.74rem;color:var(--note);font-style:italic}
+.needs__estimate{font-size:.7rem;color:var(--note)}
+
+.btn{
+  font-weight:500;
+  padding:.45rem .9rem;
+  border-radius:.35rem;
+  border:.07rem solid var(--gold);
+  background:var(--bone);
+  color:var(--ink);
+  cursor:pointer;
+  white-space:nowrap;
+  text-decoration:none;
+  display:inline-block;
+}
+.btn:hover{background:var(--sand)}
+.btn--primary{background:var(--gold);border-color:#8a661f}
+.btn--primary:hover{background:#d8b36e}
+.btn--block{width:100%;text-align:center}
+.btn[aria-disabled="true"],.btn:disabled{opacity:.5;pointer-events:none;cursor:not-allowed}
+
+/* ---------------------------- pattern head ---------------------------- */
+
+.pattern-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:1rem;
+  flex-wrap:wrap;
+}
+
+/* ------------------------------ viewer ------------------------------ */
+
+.viewer-controls{margin-bottom:.7rem}
+
+.viewer-legend[hidden]{display:none}
+.viewer-legend{display:flex;gap:1rem;margin-bottom:.5rem;font-size:.78rem}
+.legend-chip{display:flex;align-items:center;gap:.35rem}
+.legend-chip::before{content:"";width:1rem;height:0;border-top:.14rem solid}
+.legend-chip--a::before{border-color:var(--indigo)}
+.legend-chip--b::before{border-color:var(--rust)}
+
+.viewer-svg-wrap{
+  background:#fff;
+  border:.06rem solid var(--sand);
+  border-radius:.3rem;
+  overflow:auto;
+  max-height:32rem;
+  padding:.5rem;
+}
+.viewer-svg-wrap svg{display:block;margin:0 auto}
+
+.diff-list{margin-top:.7rem;font-size:.78rem}
+.diff-list ul{margin:.3rem 0 0;padding-left:1.1rem}
+.diff-list code{background:var(--bone);padding:.05rem .3rem;border-radius:.2rem}
+
+/* ----------------------------- timeline ----------------------------- */
+
+.timeline{
+  list-style:none;
+  margin:0;padding:0;
+  display:flex;
+  flex-direction:column;
+  gap:.6rem;
+}
+.timeline__entry{
+  border-left:.2rem solid var(--gold);
+  padding:.3rem .7rem;
+  background:var(--bone);
+  border-radius:0 .3rem .3rem 0;
+}
+.timeline__entry-head{
+  display:flex;
+  gap:.5rem;
+  align-items:baseline;
+  flex-wrap:wrap;
+  font-size:.8rem;
+}
+.timeline__version{font-weight:600}
+.timeline__change-type{
+  font-family:"Poppins",sans-serif;
+  font-size:.68rem;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  color:var(--note);
+}
+.timeline__date{color:var(--note);font-size:.72rem;margin-left:auto}
+
+/* Which drafts actually got the fitting history applied, and which fell
+   back to plain formulas — otherwise they look identical in the timeline. */
+.timeline__tag{
+  font-family:"Poppins",sans-serif;
+  font-size:.62rem;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+  padding:.1rem .4rem;
+  border-radius:.8rem;
+  white-space:nowrap;
+}
+.timeline__tag--adjusted{background:var(--moss);color:var(--cream)}
+.timeline__tag--fallback{background:var(--sand);color:#5c4a28}
+.timeline__tag--estimated{background:var(--clay);color:var(--cream)}
+.timeline__reason{margin:.3rem 0 0;font-size:.82rem}
+.timeline__fit-notes{margin:.2rem 0 0;font-size:.78rem;color:var(--note);font-style:italic}
+.timeline__empty{color:var(--note);font-style:italic;font-size:.82rem}
+
+/* --------------------------- revise points --------------------------- */
+
+#revise-points{display:flex;flex-direction:column;gap:.7rem;margin-bottom:.6rem}
+.revise-piece__name{
+  font-family:"Cinzel",Georgia,serif;
+  font-size:.78rem;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+  color:var(--note);
+  margin:0 0 .4rem;
+}
+.revise-piece__points{
+  display:flex;
+  flex-direction:column;
+  gap:.4rem;
+  max-height:16rem;
+  overflow-y:auto;
+  padding-right:.3rem;
+}
+.revise-point{
+  display:flex;
+  align-items:center;
+  gap:.4rem;
+  font-size:.75rem;
+}
+.revise-point span{
+  color:var(--note);
+  flex:1 1 auto;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.revise-point input{width:4.6rem;padding:.25rem .35rem;flex:0 0 auto}
+
+/* ------------------------------ ask box ------------------------------ */
+
+.ask-answer{
+  margin-top:.8rem;
+  background:var(--bone);
+  border-radius:.35rem;
+  padding:.7rem .9rem;
+  font-size:.85rem;
+}
+.ask-answer__text{margin:0 0 .5rem}
+.ask-answer__used{font-size:.76rem;color:var(--note)}
+.ask-answer__used li{margin-bottom:.3rem}

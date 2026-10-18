@@ -20,6 +20,7 @@ from anthropic import Anthropic
 from fastapi import Depends, FastAPI, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
@@ -45,13 +46,13 @@ from api.schema import (
 
 app = FastAPI(title="Pattern Tracker")
 
-# This API only ever runs on your own machine (see CLAUDE.md: never
-# deployed live) — the frontend it talks to is personal-profile's
-# local-only Phase 7 pages, served from a different port by a plain
-# static file server, which makes it a different browser origin even
-# though both sides are on localhost. Scoped to localhost/127.0.0.1
-# origins specifically rather than "*", since there's no reason a
-# non-local page should ever be allowed to call this.
+# The UI in web/ is served by this same app, so the ordinary setup is
+# same-origin and needs no CORS at all. This stays for the cases that
+# aren't: opening web/index.html straight off disk during development, or
+# pointing the UI's API field at a differently-ported instance. Scoped to
+# localhost/127.0.0.1 rather than "*", since this API only ever runs on
+# your own machine (CLAUDE.md: never deployed live) and no non-local page
+# has any business calling it.
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
@@ -754,3 +755,12 @@ async def post_croquis(file: UploadFile) -> dict[str, Any]:
     croquis_ref = str(stored_path.relative_to(CROQUIS_DIR.parent))
 
     return {"croquis_ref": croquis_ref}
+
+
+# The local UI, served by the same app that serves the API — one command
+# starts the whole tool, and the page is same-origin with the endpoints it
+# calls. Mounted LAST on purpose: a mount at "/" matches anything not
+# already claimed, so declaring it earlier would shadow every route above.
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+if WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

@@ -318,14 +318,21 @@ reason and cites the revision it came from.
 ## Phase 7 — Frontend
 
 **Goal:** usable without touching the API directly — but NOT a live embedded
-feature on the portfolio site (see CLAUDE.md's intro: local-only). Lives at
-`personal-profile/pattern-tracker-app/`, plain HTML/CSS/JS matching that
-repo's actual stack, reusing its colour tokens and type pairing for visual
-consistency. Reachable locally (`personal-profile`'s existing static server,
-`python3 serve.py`, then open `pattern-tracker-app/index.html`) but never
-linked from the public nav — the portfolio's sewing box / tin shelf item
-still only links to the case-study write-up (`docs/CASE_STUDY.md`), not this
-tool.
+feature on the portfolio site (see CLAUDE.md's intro: local-only).
+
+Lives in this repo at `web/`, plain HTML/CSS/JS, served by the same FastAPI
+app: `uv run uvicorn api.main:app --reload`, then `http://localhost:8000`.
+One command starts the whole tool and the page is same-origin with the API.
+
+**Relocated 2026-10-17.** It was first built in `personal-profile/
+pattern-tracker-app/` on the reasoning that it could reuse that site's
+stylesheets. That was the wrong boundary: the whole tool belongs in one
+repo, and the portfolio gets a written case study — screenshots, design
+notes, technical spec — not the running thing. The move also removed a real
+dependency, a `<link>` reaching into `../homepage/bookshelf.css`, which only
+worked while the two repos sat side by side. The fourteen colour tokens it
+actually used are now declared in `web/app.css`; the palette still echoes
+the portfolio so they read as one project, but nothing crosses repos.
 
 - Measurement form and croquis upload — done. Measurements come from the
   body model (9.1), and the five optional ones the bodice draft would

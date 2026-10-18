@@ -527,6 +527,29 @@ def test_get_outline_404s_for_a_missing_version():
 
 
 # --------------------------------------------------------------------------
+# The UI is served by this same app (web/ mounted at "/")
+# --------------------------------------------------------------------------
+def test_the_ui_is_served_at_the_root():
+    """One command starts the whole tool, and the page ends up same-origin
+    with the API it calls."""
+    response = _client().get("/")
+
+    assert response.status_code == 200
+    assert "Pattern Tracker" in response.text
+
+
+def test_the_static_mount_does_not_shadow_the_api():
+    """A mount at "/" matches anything not already claimed, so declaring it
+    before the routes would swallow every endpoint. This is the regression
+    that would make the whole API disappear at once."""
+    client = _client()
+
+    for path in ("/patterns", "/garment-types", "/body-profile"):
+        assert client.get(path).status_code in (200, 404), path
+        assert "text/html" not in client.get(path).headers.get("content-type", "")
+
+
+# --------------------------------------------------------------------------
 # GET/PUT /body-profile and its two hooks (PLAN.md Phase 9.1)
 # --------------------------------------------------------------------------
 def test_get_body_profile_404s_before_anything_is_recorded():

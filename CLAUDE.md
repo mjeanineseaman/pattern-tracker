@@ -53,13 +53,13 @@ The tracker is not a separate system from the drafting tool. It is simply
 
 - **Backend:** Python 3.11+, FastAPI, SQLite. No Postgres, no Docker, no queue.
   Personal scale means low hundreds of revisions, not millions.
-- **Frontend:** plain HTML/CSS/JS, no framework, no build step — matches the
-  portfolio site's own actual stack (`personal-profile`, a static site served
-  by a plain Python `http.server`, not the React/TS setup this doc used to
-  assume). Lives at `personal-profile/pattern-tracker-app/`, reusing that
-  site's colour tokens and type pairing (`homepage/bookshelf.css`) for visual
-  consistency, but it's its own page, not a shared component library — and
-  it's never linked from the public nav (see the intro above: local-only).
+- **Frontend:** plain HTML/CSS/JS in `web/`, no framework, no build step,
+  served by this same FastAPI app. One command starts the whole tool and the
+  page is same-origin with the API it calls. The whole tool lives in this
+  repo — the portfolio only ever gets a written case study, never the
+  running thing (see the intro above). Its palette and type pairing echo the
+  portfolio site so they read as one project, but the values are declared in
+  `web/app.css`: nothing here may reach into another repo's stylesheets.
 - **Vector search:** store float32 vectors as SQLite BLOBs, brute-force cosine
   in Python. Do NOT add pgvector, Chroma, Qdrant, or FAISS. At this scale a
   linear scan over a few hundred rows is faster than the client library's import.
@@ -104,12 +104,22 @@ api/
   drafting/        # measurements -> geometry (the real pattern math)
   export/          # geometry -> SVG -> tiled printable PDF
   rag/             # embedding, retrieval, answer synthesis
-  main.py          # FastAPI app
+  body_profile.py  # the body model: current best known measurements
+  learnings.py     # what past fittings taught us, per garment type
+  main.py          # FastAPI app; also serves web/
+web/
+  index.html       # the local UI. No framework, no build step.
+  app.js
+  app.css
 tests/
   example_bodice.py  # worked example: build v1, apply fit edit, diff
 docs/
   PLAN.md          # phased build plan. Read this to pick up work.
 ```
+
+The whole tool is in this repo. The portfolio repo gets a written case
+study about it — screenshots, design notes, technical spec — and nothing
+that runs.
 
 ## Invariants — do not violate these
 
@@ -137,10 +147,13 @@ revision history.
 ## Commands
 
 ```bash
-uv run uvicorn api.main:app --reload     # dev server
+uv run uvicorn api.main:app --reload     # API + the UI at http://localhost:8000
 uv run pytest                            # tests
 uv run python tests/example_bodice.py    # worked example, prints a diff
 ```
+
+One server runs everything: the API on its routes, the UI from `web/` at
+the root.
 
 ## Conventions
 
