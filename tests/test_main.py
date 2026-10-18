@@ -745,11 +745,24 @@ def test_the_refusal_names_the_measurements_that_type_will_need():
 
     detail = client.post("/patterns", json={
         **_NEW_PATTERN_BODY,
-        "intent": {"garment_type": "sleeve", "fabric_class": "woven"},
+        "intent": {"garment_type": "shirt", "fabric_class": "woven"},
     }).json()["detail"]
 
     assert "shoulder_width" in detail
     assert "arm_length" in detail
+
+
+def test_a_shirt_is_refused_on_the_sleeve_block_specifically():
+    """Half a shirt — the bodice — already drafts, so a flat "not
+    supported" would hide which piece is actually missing."""
+    client = _client()
+
+    detail = client.post("/patterns", json={
+        **_NEW_PATTERN_BODY,
+        "intent": {"garment_type": "shirt", "fabric_class": "woven"},
+    }).json()["detail"]
+
+    assert "sleeve block" in detail
 
 
 def test_a_bodice_drafts_without_hip_or_shoulder_width():
@@ -781,7 +794,12 @@ def test_garment_types_endpoint_reports_what_is_draftable_and_what_is_missing():
     assert types["bodice"]["missing"] == []
     assert types["skirt"]["draftable"] is False
     assert "hip" in types["skirt"]["missing"]
-    assert "shoulder_width" in types["sleeve"]["missing"]
+
+    shirt = types["shirt"]
+    assert shirt["blocks"] == ["bodice", "sleeve"]
+    assert shirt["missing_blocks"] == ["sleeve"]
+    assert "shoulder_width" in shirt["missing"]
+    assert "bust" not in shirt["missing"]  # the bodice half is measured
 
 
 # --------------------------------------------------------------------------

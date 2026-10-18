@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
+from enum import Enum
 
 from api.schema import GarmentType, Measurements
 
@@ -88,32 +89,75 @@ _NEEDS_BY_GARMENT: dict[GarmentType, tuple[MeasurementNeed, ...]] = {
 }
 
 
-# What each garment type needs *measured* before it can be drafted at all —
+class Block(str, Enum):
+    """A drafted pattern block. Garments are made of these.
+
+    Separating blocks from garments is what lets a shirt be defined as "a
+    bodice plus a sleeve" rather than as a hand-copied list of
+    measurements that can drift out of step with the bodice's own.
+    """
+    BODICE = "bodice"
+    SLEEVE = "sleeve"
+    SKIRT = "skirt"
+    TROUSER = "trouser"
+
+
+# What each block needs *measured* before it can be drafted at all —
 # distinct from the estimated-fallback list above, which is about quality.
 # These are hard prerequisites: without them there is nothing to draft from.
-#
-# Only the bodice is implemented today, so only its entry is in use. The
-# others are recorded because the dependency is already known — hip for
-# anything below the waist, shoulder_width once a sleeve has to meet an
-# armhole — and knowing it now is what lets the tool ask for a measurement
-# before someone needs it rather than after.
-_REQUIRED_BY_GARMENT: dict[GarmentType, tuple[str, ...]] = {
-    GarmentType.BODICE: ("bust", "waist", "back_length", "bust_span"),
-    GarmentType.SKIRT: ("waist", "hip"),
-    GarmentType.TROUSER: ("waist", "hip", "crotch_depth"),
-    GarmentType.SLEEVE: ("shoulder_width", "arm_length", "upper_arm", "armscye_depth"),
-    GarmentType.DRESS: ("bust", "waist", "back_length", "bust_span", "hip"),
+_BLOCK_MEASUREMENTS: dict[Block, tuple[str, ...]] = {
+    Block.BODICE: ("bust", "waist", "back_length", "bust_span"),
+    Block.SLEEVE: ("shoulder_width", "arm_length", "upper_arm", "armscye_depth"),
+    Block.SKIRT: ("waist", "hip"),
+    Block.TROUSER: ("waist", "hip", "crotch_depth"),
 }
 
-# Garment types the drafting code can actually produce. A bodice block with
-# no sleeve is a sleeveless top — that is the honest extent of what this
-# tool makes today, and saying so is better than offering a dropdown entry
-# that silently drafts a bodice whatever you picked.
-DRAFTABLE: frozenset[GarmentType] = frozenset({GarmentType.BODICE})
+# Which blocks each garment is built from. A shirt is a bodice and a sleeve;
+# a dress is a bodice and a skirt. Requirements are derived from this rather
+# than listed per garment, so a change to what a bodice needs reaches every
+# garment built on one automatically.
+_GARMENT_BLOCKS: dict[GarmentType, tuple[Block, ...]] = {
+    GarmentType.BODICE: (Block.BODICE,),
+    GarmentType.SHIRT: (Block.BODICE, Block.SLEEVE),
+    GarmentType.SKIRT: (Block.SKIRT,),
+    GarmentType.TROUSER: (Block.TROUSER,),
+    GarmentType.DRESS: (Block.BODICE, Block.SKIRT),
+}
+
+# Blocks api/drafting can actually produce. Everything else is declared but
+# unbuilt — knowing a dependency before it's needed is what lets the tool
+# ask for a measurement ahead of time rather than at the moment it blocks.
+IMPLEMENTED_BLOCKS: frozenset[Block] = frozenset({Block.BODICE})
+
+
+def garment_blocks(garment_type: GarmentType) -> tuple[Block, ...]:
+    return _GARMENT_BLOCKS.get(garment_type, ())
+
+
+def missing_blocks(garment_type: GarmentType) -> list[Block]:
+    """Which of this garment's blocks aren't drafted yet. A shirt needs a
+    sleeve block that doesn't exist, so it reports that specifically rather
+    than a flat "not supported"."""
+    return [b for b in garment_blocks(garment_type) if b not in IMPLEMENTED_BLOCKS]
+
+
+def is_draftable(garment_type: GarmentType) -> bool:
+    """Draftable only if every block it's made of is implemented. A bodice
+    block with no sleeve is a sleeveless top — the honest extent of what
+    this tool makes today."""
+    blocks = garment_blocks(garment_type)
+    return bool(blocks) and not missing_blocks(garment_type)
 
 
 def required_measurements(garment_type: GarmentType) -> tuple[str, ...]:
-    return _REQUIRED_BY_GARMENT.get(garment_type, ())
+    """The union of every constituent block's requirements, in a stable
+    order with duplicates collapsed — a shirt needs the bodice's waist once,
+    not twice."""
+    seen: dict[str, None] = {}
+    for block in garment_blocks(garment_type):
+        for field in _BLOCK_MEASUREMENTS[block]:
+            seen.setdefault(field, None)
+    return tuple(seen)
 
 
 def missing_requirements(

@@ -5,8 +5,8 @@ for the missing ones rather than quietly tuning a fallback formula until
 the output looks plausible.
 """
 from api.drafting.needs import (
-    DRAFTABLE, measurement_needs, missing_requirements, needs_to_dict,
-    required_measurements,
+    Block, garment_blocks, is_draftable, measurement_needs, missing_blocks,
+    missing_requirements, needs_to_dict, required_measurements,
 )
 from api.schema import GarmentType, Measurements
 
@@ -101,12 +101,6 @@ def test_a_skirt_needs_a_hip_measurement():
     assert missing_requirements(_measurements(hip=980), GarmentType.SKIRT) == []
 
 
-def test_a_sleeve_needs_shoulder_width():
-    missing = missing_requirements(_measurements(), GarmentType.SLEEVE)
-
-    assert "shoulder_width" in missing
-
-
 def test_a_trouser_needs_hip_and_crotch_depth():
     missing = missing_requirements(_measurements(), GarmentType.TROUSER)
 
@@ -114,17 +108,69 @@ def test_a_trouser_needs_hip_and_crotch_depth():
 
 
 def test_only_the_bodice_is_draftable_today():
-    """Drafting a bodice and labelling it "skirt" would be confidently the
+    """Drafting a bodice and labelling it a skirt would be confidently the
     wrong garment."""
-    assert DRAFTABLE == {GarmentType.BODICE}
+    assert is_draftable(GarmentType.BODICE)
+    for other in (GarmentType.SHIRT, GarmentType.SKIRT,
+                  GarmentType.TROUSER, GarmentType.DRESS):
+        assert not is_draftable(other), other
 
 
 def test_every_undraftable_type_still_declares_what_it_will_need():
     """The dependency is known now even though the drafting isn't written,
     which is what lets the tool ask for a measurement before it's needed."""
     for garment_type in (GarmentType.SKIRT, GarmentType.TROUSER,
-                         GarmentType.SLEEVE, GarmentType.DRESS):
+                         GarmentType.SHIRT, GarmentType.DRESS):
         assert required_measurements(garment_type), garment_type
+
+
+# --------------------------------------------------------------------------
+# Garments are composed of blocks
+# --------------------------------------------------------------------------
+def test_a_shirt_is_a_bodice_plus_a_sleeve():
+    assert garment_blocks(GarmentType.SHIRT) == (Block.BODICE, Block.SLEEVE)
+
+
+def test_a_dress_is_a_bodice_plus_a_skirt():
+    assert garment_blocks(GarmentType.DRESS) == (Block.BODICE, Block.SKIRT)
+
+
+def test_a_shirt_requires_both_blocks_measurements():
+    required = required_measurements(GarmentType.SHIRT)
+
+    assert set(required) >= set(required_measurements(GarmentType.BODICE))
+    for sleeve_field in ("shoulder_width", "arm_length", "upper_arm", "armscye_depth"):
+        assert sleeve_field in required
+
+
+def test_a_shared_measurement_is_required_once_not_twice():
+    """A dress is a bodice plus a skirt and both want waist."""
+    required = required_measurements(GarmentType.DRESS)
+
+    assert len(required) == len(set(required))
+    assert required.count("waist") == 1
+
+
+def test_a_shirt_is_blocked_specifically_on_the_sleeve_block():
+    """Half of a shirt — the bodice — is already drafted, so reporting a
+    flat "not supported" would hide which piece is actually missing."""
+    assert missing_blocks(GarmentType.SHIRT) == [Block.SLEEVE]
+
+
+def test_a_shirt_needs_the_sleeve_measurements_that_arent_taken_yet():
+    missing = missing_requirements(_measurements(), GarmentType.SHIRT)
+
+    assert "shoulder_width" in missing
+    assert "arm_length" in missing
+    assert "bust" not in missing  # the bodice half is already measured
+
+
+def test_garment_requirements_follow_their_blocks():
+    """Requirements are derived from blocks, not hand-copied, so a change to
+    what a bodice needs reaches every garment built on one."""
+    for garment_type in (GarmentType.SHIRT, GarmentType.DRESS):
+        for field in required_measurements(GarmentType.BODICE):
+            assert field in required_measurements(garment_type), (garment_type, field)
 
 
 def test_a_requirement_is_not_the_same_as_an_estimated_fallback():

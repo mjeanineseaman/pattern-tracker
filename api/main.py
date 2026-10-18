@@ -30,8 +30,8 @@ from api.db import get_connection
 from api.drafting.ai_adjust import adjust_draft
 from api.drafting.bodice import draft_bodice, draft_bodice_from_sloper
 from api.drafting.needs import (
-    DRAFTABLE, measurement_needs, missing_requirements, needs_to_dict,
-    required_measurements,
+    garment_blocks, is_draftable, measurement_needs, missing_blocks,
+    missing_requirements, needs_to_dict, required_measurements,
 )
 from api.learnings import learnings_for, record_learning
 from api.export.geometry import dart_lines, offset_polyline, piece_outline
@@ -155,7 +155,9 @@ def get_garment_types(db: sqlite3.Connection = Depends(get_db)) -> list[dict]:
         missing = missing_requirements(profile, garment_type) if profile else list(required)
         out.append({
             "garment_type": garment_type.value,
-            "draftable": garment_type in DRAFTABLE,
+            "draftable": is_draftable(garment_type),
+            "blocks": [b.value for b in garment_blocks(garment_type)],
+            "missing_blocks": [b.value for b in missing_blocks(garment_type)],
             "requires": list(required),
             "missing": missing,
         })
@@ -207,13 +209,17 @@ def create_pattern(
     # Only the bodice block is implemented. Drafting a bodice and labelling
     # it "skirt" would produce a pattern that is confidently the wrong
     # garment — refuse instead (CLAUDE.md: never report confident nonsense).
-    if body.intent.garment_type not in DRAFTABLE:
+    if not is_draftable(body.intent.garment_type):
+        unbuilt = missing_blocks(body.intent.garment_type)
         raise HTTPException(
             status_code=422,
             detail=(
-                f"{body.intent.garment_type.value} isn't drafted yet — this tool "
-                f"currently makes bodice blocks (sleeveless tops). When it is, "
-                f"it will need these measurements: "
+                f"{body.intent.garment_type.value} isn't drafted yet — it needs the "
+                f"{', '.join(b.value for b in unbuilt)} block"
+                f"{'s' if len(unbuilt) > 1 else ''}, which "
+                f"{'are' if len(unbuilt) > 1 else 'is'} not built. This tool currently "
+                f"drafts the bodice block (a sleeveless top). When it is, it will need "
+                f"these measurements: "
                 f"{', '.join(required_measurements(body.intent.garment_type))}."
             ),
         )

@@ -529,6 +529,28 @@ one pass with a tape; a guess costs a muslin.
   documented defaults they always were; the tool now just says when it's
   leaning on one.
 
+### 9.6b Garments are composed of blocks (decided 2026-10-17)
+
+`GarmentType.SLEEVE` was wrong: a sleeve is a block you draft *as part of* a
+garment, never the thing being made. Replaced with `SHIRT`, defined as a
+bodice block plus a sleeve block.
+
+- `api/drafting/needs.py` declares `Block` (bodice, sleeve, skirt, trouser),
+  which measurements each block requires, and which blocks each garment is
+  built from — shirt = bodice + sleeve, dress = bodice + skirt.
+- A garment's required measurements are **derived** from its blocks, not
+  listed per garment, so a change to what a bodice needs reaches everything
+  built on one. Shared fields collapse: a dress needs waist once.
+- `is_draftable` is "every constituent block is implemented," so garments
+  become draftable automatically as blocks land rather than needing a list
+  updated in two places.
+- A refusal names the missing *block*, not just the garment: half a shirt
+  already drafts, so "not supported" would hide what's actually outstanding.
+- Removing an enum value is normally forbidden (snapshots carry old values
+  forever, per CLAUDE.md). Safe only because nothing had been stored with
+  `sleeve` — verified against `patterns`, `reference_slopers` and
+  `pattern_versions` before the change.
+
 ### 9.5 The validator — the part that makes this safe
 
 The relationship assertions in `tests/test_bodice.py` are currently only test

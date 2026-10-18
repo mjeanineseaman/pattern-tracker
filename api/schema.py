@@ -29,9 +29,21 @@ from pydantic.dataclasses import dataclass
 # Enums
 # --------------------------------------------------------------------------
 class GarmentType(str, Enum):
+    """Garments, not pattern pieces.
+
+    "sleeve" was here originally and has been replaced by "shirt": a sleeve
+    is a block you draft *as part of* a garment, never the thing being made.
+    The composition — a shirt is a bodice block plus a sleeve block — lives
+    in api/drafting/needs.py, which derives each garment's measurement
+    requirements from the blocks it's built from.
+
+    Safe to remove rather than deprecate because nothing had been stored
+    with it; normally a garment type, like a ChangeType, would have to stay
+    forever since snapshots carry old values (CLAUDE.md).
+    """
     BODICE = "bodice"
+    SHIRT = "shirt"
     SKIRT = "skirt"
-    SLEEVE = "sleeve"
     TROUSER = "trouser"
     DRESS = "dress"
     OTHER = "other"
