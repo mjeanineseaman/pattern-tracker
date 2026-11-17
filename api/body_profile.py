@@ -67,22 +67,60 @@ def save_profile(
     return updated_at
 
 
-def seed_profile_if_missing(
+def profile_changes(
+    before: Optional[Measurements], after: Measurements,
+) -> list[dict[str, object]]:
+    """What a save would change, as {field, from, to} entries.
+
+    Exists so an overwrite is never silent. Submitting the create form
+    replaces the profile wholesale, which is what makes the form the one
+    place you maintain your measurements — but it also means a submission
+    missing `armscye_depth` clears a value that was genuinely measured,
+    and the draft quietly goes back to estimating it. Reporting the change
+    (including a value becoming None) makes that visible and recoverable
+    instead of a silent regression in fit.
+    """
+    changes: list[dict[str, object]] = []
+    for f in dataclasses.fields(Measurements):
+        new = getattr(after, f.name)
+        old = getattr(before, f.name) if before is not None else None
+        if _differs(old, new):
+            changes.append({"field": f.name, "from": old, "to": new})
+    return changes
+
+
+def _differs(old: Optional[float], new: Optional[float]) -> bool:
+    """Whether two stored measurements are meaningfully different.
+
+    Not `!=`: a value converted from inches is stored as 800.0999999999999,
+    shown in the UI as 80.01cm, and submitted back as 800.1. Plain equality
+    reports that as an edit, so touching one field appeared to change three.
+    The epsilon is far below both the 0.1mm display rounding and anything a
+    tape measure resolves, so a real edit (0.1cm minimum through the form)
+    can't hide underneath it.
+    """
+    if old is None or new is None:
+        return old is not new
+    return abs(old - new) > 0.01
+
+
+def update_profile(
     db: sqlite3.Connection,
     measurements: Measurements,
     profile_id: str = DEFAULT_PROFILE_ID,
-) -> bool:
-    """Record the first pattern's measurements as the initial body model.
+) -> list[dict[str, object]]:
+    """Replace the body model with these measurements, and report what
+    changed.
 
-    Only fills a gap — an existing profile is never overwritten here,
-    since a later pattern drafted with deliberately different numbers
-    (someone else's bodice, a test) shouldn't silently redefine whose body
-    this is. Returns whether it wrote anything.
+    Unconditional by design: the measurements you submit when creating a
+    pattern become your profile. An earlier version only seeded when no
+    profile existed, which meant the form showed your measurements,
+    accepted an edit to them, and then silently discarded it — the profile
+    could only be corrected through a revision or a direct PUT.
     """
-    if get_profile(db, profile_id) is not None:
-        return False
+    changes = profile_changes(get_profile(db, profile_id), measurements)
     save_profile(db, measurements, profile_id)
-    return True
+    return changes
 
 
 def apply_measurement_deltas(

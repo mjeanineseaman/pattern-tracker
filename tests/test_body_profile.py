@@ -4,7 +4,7 @@ this module is pure storage plus one filter over revision deltas.
 import sqlite3
 
 from api.body_profile import (
-    apply_measurement_deltas, get_profile, save_profile, seed_profile_if_missing,
+    apply_measurement_deltas, get_profile, profile_changes, save_profile, update_profile,
 )
 from api.schema import DDL, FieldDelta, Measurements
 
@@ -55,21 +55,78 @@ def test_optional_fields_round_trip_including_none():
     assert profile.arm_length is None
 
 
-def test_seed_fills_a_missing_profile():
+def test_update_fills_a_missing_profile():
     conn = _db()
 
-    assert seed_profile_if_missing(conn, _measurements(bust=920)) is True
+    update_profile(conn, _measurements(bust=920))
+
     assert get_profile(conn).bust == 920
 
 
-def test_seed_never_overwrites_an_existing_profile():
-    """A later pattern drafted with deliberately different numbers — someone
-    else's bodice, a test — must not silently redefine whose body this is."""
+def test_update_overwrites_an_existing_profile():
+    """Unconditional by design: the measurements submitted when creating a
+    pattern become the profile, so an edit made in that form sticks."""
     conn = _db()
     save_profile(conn, _measurements(bust=920))
 
-    assert seed_profile_if_missing(conn, _measurements(bust=700)) is False
-    assert get_profile(conn).bust == 920
+    update_profile(conn, _measurements(bust=955))
+
+    assert get_profile(conn).bust == 955
+
+
+def test_update_reports_what_it_changed():
+    conn = _db()
+    save_profile(conn, _measurements(bust=920, waist=740))
+
+    changes = update_profile(conn, _measurements(bust=955, waist=740))
+
+    assert changes == [{"field": "bust", "from": 920, "to": 955}]
+
+
+def test_update_reports_a_measurement_being_cleared():
+    """The dangerous case: a submission omitting an optional measurement
+    wipes one that was really taken, and the draft silently goes back to
+    estimating it. It has to be visible."""
+    conn = _db()
+    save_profile(conn, _measurements(armscye_depth=190.5))
+
+    changes = update_profile(conn, _measurements())
+
+    assert {"field": "armscye_depth", "from": 190.5, "to": None} in changes
+
+
+def test_an_unchanged_submission_reports_nothing():
+    conn = _db()
+    save_profile(conn, _measurements(bust=920))
+
+    assert update_profile(conn, _measurements(bust=920)) == []
+
+
+def test_float_noise_from_the_unit_round_trip_is_not_an_edit():
+    """A measurement converted from inches stores as 800.0999999999999,
+    displays as 80.01cm and comes back as 800.1. Plain equality called that
+    an edit, so changing one field appeared to change three."""
+    conn = _db()
+    save_profile(conn, _measurements(waist=800.0999999999999))
+
+    assert update_profile(conn, _measurements(waist=800.1)) == []
+
+
+def test_a_real_edit_is_still_reported():
+    """The smallest edit the form can make is 0.1cm — 1mm — which must sit
+    well clear of the float-noise threshold."""
+    conn = _db()
+    save_profile(conn, _measurements(waist=800.1))
+
+    changes = update_profile(conn, _measurements(waist=801.1))
+
+    assert [c["field"] for c in changes] == ["waist"]
+
+
+def test_profile_changes_against_no_profile_reports_every_set_field():
+    changes = profile_changes(None, _measurements(bust=920))
+
+    assert {"field": "bust", "from": None, "to": 920} in changes
 
 
 def test_measurement_deltas_update_the_profile():

@@ -449,10 +449,11 @@ def test_create_pattern_persists_so_it_can_be_fetched_back():
     response = client.get(f"/patterns/{created['id']}")
 
     assert response.status_code == 200
-    # draft_note and measurement_needs describe *this drafting run*, not the
-    # stored pattern, so they're on the create response only.
+    # draft_note, measurement_needs and body_profile_updated describe *this
+    # drafting run*, not the stored pattern, so they're on the create
+    # response only.
     stored_fields = {k: v for k, v in created.items()
-                     if k not in ("draft_note", "measurement_needs")}
+                     if k not in ("draft_note", "measurement_needs", "body_profile_updated")}
     assert response.json() == stored_fields
 
 
@@ -575,17 +576,34 @@ def test_creating_the_first_pattern_seeds_the_body_profile():
     assert client.get("/body-profile").json()["bust"] == 920
 
 
-def test_creating_a_later_pattern_does_not_overwrite_the_body_profile():
-    """Drafting someone else's bodice, or a test, must not silently
-    redefine whose body this is."""
+def test_creating_a_later_pattern_updates_the_body_profile():
+    """Unconditional by design: this form is where measurements are
+    maintained, so an edit made in it has to stick."""
     client = _client()
     client.post("/patterns", json=_NEW_PATTERN_BODY)
-    client.post("/patterns", json={
+
+    response = client.post("/patterns", json={
         **_NEW_PATTERN_BODY,
-        "measurements": dict(_NEW_PATTERN_BODY["measurements"], bust=700),
+        "measurements": dict(_NEW_PATTERN_BODY["measurements"], bust=955),
     })
 
-    assert client.get("/body-profile").json()["bust"] == 920
+    assert client.get("/body-profile").json()["bust"] == 955
+    assert {"field": "bust", "from": 920, "to": 955} in response.json()["body_profile_updated"]
+
+
+def test_creating_a_pattern_reports_a_measurement_it_cleared():
+    """A submission omitting an optional measurement wipes one that was
+    really taken. That has to come back visibly, not silently."""
+    client = _client()
+    client.post("/patterns", json={
+        **_NEW_PATTERN_BODY,
+        "measurements": dict(_NEW_PATTERN_BODY["measurements"], armscye_depth=190.5),
+    })
+
+    response = client.post("/patterns", json=_NEW_PATTERN_BODY)
+
+    assert {"field": "armscye_depth", "from": 190.5, "to": None} \
+        in response.json()["body_profile_updated"]
 
 
 def test_revising_a_measurement_updates_the_body_profile():

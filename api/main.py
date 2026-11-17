@@ -25,7 +25,7 @@ from pydantic import TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from api.body_profile import (
-    apply_measurement_deltas, get_profile, save_profile, seed_profile_if_missing,
+    apply_measurement_deltas, get_profile, save_profile, update_profile,
 )
 from api.db import get_connection
 from api.drafting.ai_adjust import adjust_draft
@@ -327,16 +327,19 @@ def create_pattern(
         ),
     )
     embed_and_store_revision(db, revision)
-    # First pattern seeds the body model (Phase 9.1). Never overwrites an
-    # existing one — correcting the body happens through /revise or
-    # PUT /body-profile, not as a side effect of drafting something new.
-    seed_profile_if_missing(db, body.measurements)
+    # The measurements submitted here become the body model, every time —
+    # this form is where measurements are maintained, so an edit made in it
+    # has to stick. Changes are reported back rather than applied silently,
+    # since a submission omitting an optional measurement clears one that
+    # was really taken.
+    profile_updated = update_profile(db, body.measurements)
     db.commit()
 
     return {
         **pattern.to_dict(),
         "draft_note": draft_note,
         "measurement_needs": needs_to_dict(needs),
+        "body_profile_updated": profile_updated,
     }
 
 

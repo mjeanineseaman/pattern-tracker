@@ -174,10 +174,14 @@ async function prefillMeasurementsFromBodyProfile() {
     for (const [field, inputId] of Object.entries(MEASUREMENT_FIELDS)) {
       el(inputId).value = profile[field] != null ? mmToCm(profile[field]) : "";
     }
-    hint.textContent = "Filled in from your body profile — adjust if they've changed.";
+    hint.textContent =
+      "Filled in from your body profile — edit any of them and the profile updates when you create the pattern.";
   } catch (e) {
-    // 404 just means nothing's recorded yet; the defaults in the form stand.
-    hint.textContent = "No body profile yet — this first pattern will start one.";
+    // 404 means nothing's recorded yet. The fields stay empty rather than
+    // showing invented numbers — a measurement you didn't take shouldn't
+    // arrive pre-filled and get submitted as if you had.
+    for (const inputId of Object.values(MEASUREMENT_FIELDS)) el(inputId).value = "";
+    hint.textContent = "No measurements recorded yet — what you enter here becomes your body profile.";
   }
   await renderMeasurementNeeds();
 }
@@ -361,14 +365,34 @@ el("create-pattern-btn").addEventListener("click", async () => {
     });
     await loadPatternList();
     await openPattern(pattern.id);
-    if (pattern.measurement_needs && pattern.measurement_needs.length > 0) {
-      const fields = pattern.measurement_needs.map((n) => n.field.replace(/_/g, " "));
-      showBanner(
-        `Drafted. ${fields.length} measurement${fields.length > 1 ? "s were" : " was"} ` +
-        `estimated rather than measured: ${fields.join(", ")}. ` +
-        `Adding them to your body profile will make the next draft fit closer.`,
+    const notes = [];
+
+    // A cleared measurement is called out separately from an edited one:
+    // losing a value you really took sends the draft back to estimating
+    // it, which is a quiet downgrade in fit rather than a correction.
+    const changes = pattern.body_profile_updated || [];
+    const cleared = changes.filter((c) => c.to === null);
+    const edited = changes.filter((c) => c.to !== null);
+    if (edited.length > 0) {
+      notes.push(
+        `Body profile updated: ${edited.map((c) => c.field.replace(/_/g, " ")).join(", ")}.`,
       );
     }
+    if (cleared.length > 0) {
+      notes.push(
+        `Cleared from your body profile: ${cleared.map((c) => c.field.replace(/_/g, " ")).join(", ")} ` +
+        `— the draft will estimate ${cleared.length > 1 ? "these" : "this"} until measured again.`,
+      );
+    }
+
+    if (pattern.measurement_needs && pattern.measurement_needs.length > 0) {
+      const fields = pattern.measurement_needs.map((n) => n.field.replace(/_/g, " "));
+      notes.push(
+        `${fields.length} measurement${fields.length > 1 ? "s were" : " was"} ` +
+        `estimated rather than measured: ${fields.join(", ")}.`,
+      );
+    }
+    if (notes.length > 0) showBanner(notes.join(" "));
   } catch (e) {
     showBanner(`Couldn't create pattern: ${e.message}`);
   } finally {
