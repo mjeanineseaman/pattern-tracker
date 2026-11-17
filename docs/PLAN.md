@@ -45,6 +45,16 @@ muslin, not something to automate.
 4. **Phase 8 (polish)** — not started: backup automation, JSON export with
    full history, revision tags for muslin rounds.
 
+**2026-11-17 — Phase 10 added, and it outranks everything above.** Phase 9
+shipped the fitting-history half of the project and left the croquis half
+not just unbuilt but foreclosed: the design step never runs without
+learnings, and the model is explicitly told not to redraft. The result is
+that two different croquis produce identical patterns, which is not a
+partial version of the stated goal — it's the goal missing. Phase 10 specs
+the fix in three tiers. Tier 1 alone restores "the croquis drives the
+pattern"; Tiers 2 and 3 extend it. Nothing else on this list matters as
+much as that.
+
 **Note on the current flow vs. the intended one (2026-10-17):** today the AI
 does *not* draft. `POST /patterns` is pure math, the PDF exporter is pure
 rendering, and the RAG layer only answers questions — it never feeds drafting.
@@ -676,6 +686,195 @@ rejected.
    automatic. "Whether a pattern fits" remains a human judgment — the AI now
    gets more context, but it still never gets to declare the result correct,
    only generated.
+
+---
+
+## Phase 10 — The croquis actually drives the pattern
+
+**Goal:** a croquis of a scoop-neck crop top and a croquis of a high-neck
+tunic produce different patterns. Today they produce byte-identical ones.
+
+**Why this phase exists.** The project was always "croquis in, a pattern of
+*that croquis* out, informed by fitting history and the body profile."
+Phase 9 built the fitting-history half and left the croquis half unbuilt —
+worse, it built it in a way that forecloses it:
+
+- `adjust_draft()` returns before building a prompt when there are no
+  learnings, so on a pattern with no history the sketch never reaches a
+  model at all. That is the current state of every pattern in the database.
+- When it does run, the system prompt says *"Your job is NOT to redraft
+  it"*, and the response schema is point deltas capped at 15mm each. That
+  is sufficient to nudge a dart for fit and structurally incapable of
+  restyling a block.
+
+So the croquis is stored, referenced, and never read. This phase fixes that
+without discarding the safety properties Phase 9 earned.
+
+### The shape of the fix
+
+A second, separate model call — the **design step** — that runs *before*
+the fit-correction step and is **not gated on learnings existing**:
+
+```
+draft_bodice()  ->  design step (croquis)  ->  fit step (learnings)  ->  validate  ->  store
+     pure math        Tier 1/2/3 below          Phase 9, unchanged       Phase 9.5
+```
+
+Two calls rather than one, each with its own fallback. Reasons:
+
+- The design step must work on a brand-new pattern with zero history. One
+  combined call inherits the learnings gate, which is the exact bug here.
+- The two jobs are different in kind. Design is about the *garment*; fit
+  correction is about the *body*. A prompt that does both does neither
+  sharply.
+- Failure isolates. A design proposal that fails validation shouldn't throw
+  away a good fit correction, or vice versa.
+
+**Order is design first, then fit.** Learnings describe body-specific
+corrections ("the back pulls across the shoulder blade") that hold
+regardless of style, so they get the last word, applied to the final
+silhouette rather than to a block the design step is about to reshape.
+
+### The bound problem, and why parameters not coordinates
+
+Phase 9's per-point 15mm cap cannot apply here — a scoop neck legitimately
+drops the neckline 80mm. But removing the bound and letting the model emit
+coordinates reintroduces exactly the failure CLAUDE.md records (an armhole
+thirty times too deep that passed every check it was given).
+
+The resolution: **the model picks named design parameters; deterministic
+code executes them.** Each parameter carries its own documented range,
+which replaces the per-point cap for this step. The model never sees or
+emits a coordinate.
+
+This keeps every Phase 9 property that mattered — code owns geometry, the
+validator still gates the result, every failure path falls back to the
+unadjusted draft — while actually letting the sketch change the garment.
+
+### Tier 1 — Parametric design
+
+Covers most sleeveless-top variation. The model returns one JSON object;
+`null` for any parameter it can't read from the sketch means "leave the
+block default", which is a better answer than a guess.
+
+| Parameter | Range | Applied to |
+|---|---|---|
+| `neckline_front_drop_mm` | 0–140 | `cf_neck.y` + the neckline cubic's controls |
+| `neckline_front_width_mm` | 0–60 | `front_neck_side.x` + shoulder start |
+| `neckline_back_drop_mm` | 0–120 | `cb_neck.y` + controls |
+| `neckline_back_width_mm` | 0–60 | `back_neck_side.x` |
+| `armhole_raise_mm` | 0–30 | `underarm_front` / `underarm_back`, armhole controls, side-seam start |
+| `hem_change_mm` | −150–0 | waist edge, dart legs, CF/CB and side-seam ends |
+| `waist_suppression` | 0.0–1.0 | scales waist-dart intake (0 = boxy, 1 = block default) |
+
+Each gets its own pure function in a new `api/drafting/design.py`,
+signature `(pieces, value) -> pieces`, same purity rule as `bodice.py`: no
+I/O, no model call, fully testable alone.
+
+**The three constraints that make this harder than it looks:**
+
+1. **The fold-line tangent invariant.** `cf_neck` and `cb_neck` sit on the
+   fold. CLAUDE.md records a real bug here: a curve meeting the fold with
+   anything but a horizontal tangent mirrors into a visible cusp, invisible
+   on the half-piece. Every neckline change must move the cubic's control
+   points to preserve that tangent, and must be tested against
+   `mirrored_outline()`, not just the half.
+2. **`hem_change_mm` is negative-only for now.** Cropping truncates above
+   the waist and is clean. *Lengthening* below the waist needs `hip` and
+   `waist_to_hip`, which are deliberately unmeasured (Phase 9.6b) — and a
+   flare decision the block has no basis for. Lengthening waits for the
+   skirt block.
+3. **Armhole raise interacts with the validator.** Moving the underarm up
+   changes the chord the concavity and bulge-ratio checks measure against.
+   The 9.5 bounds were calibrated on unmodified drafts; they need
+   re-measuring across the parameter range before this ships, exactly as
+   the original bound was re-measured across body sizes.
+
+**Done when:** two different croquis of sleeveless tops, same body, produce
+visibly different necklines and hems, and both pass the validator.
+
+### Tier 2 — Dart manipulation
+
+The classic patternmaking move, and the reason a block is worth having: the
+bust dart's intake can be *rotated* to a different position without
+changing how much suppression there is. French dart, side dart, waist dart,
+or a shoulder dart — same block, same fit, different seam.
+
+This is a well-defined geometric operation: pivot the affected outline
+points about `bust_point` by the angle subtended by the closing dart, then
+reopen that intake at the target location. Deterministic, exact, and
+testable against an invariant — **total suppression is conserved**, so the
+waist and bust circumference of the finished piece must not change.
+
+The model's entire job is choosing the target position from the sketch
+(`"bust_dart_position": "french" | "side" | "waist" | "shoulder" | null`).
+It proposes a name from a fixed set; code does the trigonometry.
+
+Front piece only to begin with — it already carries `bust_dart` and
+`front_shoulder_dart` with `bust_point` as the pivot, so the geometry is
+all present.
+
+**Done when:** rotating a dart changes where the seam falls while the
+mirrored outline's measured waist and bust stay within tolerance of the
+unrotated piece.
+
+### Tier 3 — Style lines
+
+Princess seams and similar: one piece becomes two, with the dart intake
+absorbed into the new seam. This is the only tier that changes *topology*
+rather than moving existing points, which makes it meaningfully harder and
+is why it goes last.
+
+What it needs that the others don't:
+
+- **New pieces with permanent ids.** `bodice_front` splits into
+  `bodice_front_centre` / `bodice_front_side`. CLAUDE.md's stable-id rule
+  applies in full — these names are forever, and every historical revision
+  that referenced `bodice_front` still has to resolve.
+- **`ChangeType.PIECE_ADDED` / `PIECE_REMOVED` already exist** in the enum
+  and `infer_change_type` already classifies them, so the revision and diff
+  machinery needs no new vocabulary.
+- **A real interaction with learnings.** A stored learning referencing
+  `bodice_front.points[bust_point]` is meaningless once that piece no
+  longer exists. The fit step must skip learnings whose points are absent
+  rather than fail — and say so in the draft note, since silently dropping
+  a fitting correction is the kind of quiet loss this project exists to
+  prevent.
+
+**Done when:** a princess-seam croquis produces two front pieces whose
+joined outline matches the single-piece outline, and whose seam absorbs the
+bust-dart intake.
+
+### Failure behaviour
+
+Same discipline as Phase 9, applied per step. Any of: no key, no network,
+unparseable JSON, a parameter outside its range, an unknown dart position,
+or geometry that fails the validator — the design step returns the
+unadjusted draft and records why in the version's revision reason. A
+pattern always gets drafted; sometimes it's just the plain block.
+
+The existing draft-origin tags in the timeline gain a third state, so a
+draft styled from the croquis is distinguishable at a glance from one that
+fell back to the block.
+
+### Limitations to decide on before building
+
+1. **The validator was calibrated on unmodified drafts.** Tier 1 moves
+   points well outside the range those bounds were measured across. They
+   need re-measuring per parameter, or the first deep neckline will be
+   rejected as broken geometry when it's correct.
+2. **A sketch is a poor source of absolute measurements.** The model can
+   read *proportion* from a croquis far better than millimetres. Expect
+   `neckline_front_drop_mm` to be an interpretation, not a reading — which
+   is an argument for the review screen showing what it chose before the
+   pattern is drafted, rather than after.
+3. **This is the first step where the model's output is visible as design
+   rather than fit.** A wrong fit correction shows up at the muslin. A
+   wrong neckline shows up immediately on screen — which is better, and
+   worth exploiting: Tier 1's output is cheap to review before export.
+4. **Tier 3 is optional.** Tiers 1 and 2 deliver "the croquis drives the
+   pattern" for the garments this tool can currently make. Tier 3 is worth
+   building when a princess-seam design is actually wanted, not before.
 
 ---
 
