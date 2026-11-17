@@ -510,14 +510,18 @@ def _draft_back(s: _Shared) -> PatternPiece:
         Edge(id="neckline", role=EdgeRole.NECKLINE, segments=[
             Segment("cb_neck", "back_neck_side", SegmentKind.CUBIC, neck_c1, neck_c2),
         ]),
-        Edge(id="shoulder", role=EdgeRole.SEAM, segments=[
+        # joins_to declares which edge this one is sewn to. The validator
+        # walks these to check mated seams are the same sewn length —
+        # "walking the seams" in patternmaking terms, and the check that
+        # catches a design change shortening one side of a pair.
+        Edge(id="shoulder", role=EdgeRole.SEAM, joins_to="bodice_front.shoulder", segments=[
             Segment("back_neck_side", "back_shoulder_dart_leg_p", SegmentKind.LINE),
             Segment("back_shoulder_dart_leg_p", "back_shoulder_dart_d1", SegmentKind.LINE),
             Segment("back_shoulder_dart_d1", "back_shoulder_dart_leg_r", SegmentKind.LINE),
             Segment("back_shoulder_dart_leg_r", "back_shoulder_tip", SegmentKind.LINE),
         ]),
         Edge(id="armhole", role=EdgeRole.ARMHOLE, segments=armhole_segments),
-        Edge(id="side_seam", role=EdgeRole.SEAM, segments=[
+        Edge(id="side_seam", role=EdgeRole.SEAM, joins_to="bodice_front.side_seam", segments=[
             Segment("underarm_back", "side_waist_back", SegmentKind.LINE),
         ]),
         Edge(id="waist", role=EdgeRole.SEAM, segments=[
@@ -623,11 +627,11 @@ def _draft_front(s: _Shared) -> PatternPiece:
         Edge(id="neckline", role=EdgeRole.NECKLINE, segments=[
             Segment("front_neck_side", "cf_neck", SegmentKind.CUBIC, neck_c1, neck_c2),
         ]),
-        Edge(id="shoulder", role=EdgeRole.SEAM, segments=[
+        Edge(id="shoulder", role=EdgeRole.SEAM, joins_to="bodice_back.shoulder", segments=[
             Segment("front_shoulder_dart_leg_t", "front_shoulder_tip", SegmentKind.LINE),
         ]),
         Edge(id="armhole", role=EdgeRole.ARMHOLE, segments=armhole_segments),
-        Edge(id="side_seam", role=EdgeRole.SEAM, segments=[
+        Edge(id="side_seam", role=EdgeRole.SEAM, joins_to="bodice_back.side_seam", segments=[
             Segment("underarm_front", "side_waist_front", SegmentKind.LINE),
         ]),
         Edge(id="waist", role=EdgeRole.SEAM, segments=[

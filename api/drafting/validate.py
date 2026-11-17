@@ -19,7 +19,7 @@ import math
 from dataclasses import dataclass
 
 from api.export.geometry import flatten_segment, piece_outline, polygon_centroid
-from api.schema import PatternPiece, Point
+from api.schema import DesignIntent, Measurements, PatternPiece, Point
 
 # Tuned from the real construction's own behaviour, as recorded in
 # tests/test_bodice.py. Each one guards a bug that actually happened.
@@ -45,6 +45,13 @@ _ARMHOLE_MIN_CONCAVITY = 0.02
 # that has become a fan, not normal variation.
 _DART_MAX_APEX_ANGLE_DEG = 60.0
 _DART_MIN_INTAKE_MM = 0.5
+
+# Measured across bust 800-1300mm on correct drafts: shoulders match
+# exactly, side seams within 0.60mm, bust ease exact, waist ease within
+# 0.22mm. These leave real headroom while still catching the millimetres
+# a broken design change would introduce.
+_SEAM_MATCH_TOLERANCE_MM = 2.0
+_EASE_TOLERANCE_MM = 2.0
 
 
 @dataclass
@@ -232,6 +239,150 @@ def check_darts(pieces: list[PatternPiece]) -> list[str]:
     return failures
 
 
+def sewn_edge_length(piece: PatternPiece, edge_id: str) -> Optional[float]:
+    """An edge's length *as sewn*, with any dart along it closed up.
+
+    A dart's two legs meet when it's stitched, so the span between them
+    contributes nothing to the finished seam — the back shoulder measures
+    143.8mm flat on paper and 127.0mm once its dart is closed. Comparing
+    flat lengths would make every darted seam look mismatched against its
+    undarted partner.
+
+    Dart spans are found by position along the edge, not by id prefix: the
+    run of segments between a dart's two legs is excluded wholesale, which
+    also drops any intermediate dart point (the raised `_d1`) that would
+    otherwise make the span longer than the straight leg-to-leg distance.
+    """
+    edge = _edge(piece, edge_id)
+    if edge is None or not edge.segments:
+        return None
+    pm = piece.point_map()
+    points = [edge.segments[0].start] + [s.end for s in edge.segments]
+
+    skip: set[int] = set()
+    for dart in piece.darts:
+        if dart.leg_a in points and dart.leg_b in points:
+            i, j = sorted((points.index(dart.leg_a), points.index(dart.leg_b)))
+            skip |= set(range(i, j))
+
+    total = 0.0
+    for k in range(len(points) - 1):
+        if k in skip:
+            continue
+        try:
+            a, b = pm[points[k]], pm[points[k + 1]]
+        except KeyError:
+            return None
+        total += math.dist((a.x, a.y), (b.x, b.y))
+    return total
+
+
+def check_mated_seams(pieces: list[PatternPiece]) -> list[str]:
+    """Seams that get sewn to each other must be the same length.
+
+    This is "walking the seams" — the most basic correctness check in
+    patternmaking, and the one that catches a design change shortening one
+    side of a pair. A neckline widened on the front but not the back
+    leaves shoulder seams that cannot be sewn together, and no other check
+    here would notice.
+
+    Pairs are read from each edge's `joins_to` rather than hardcoded, so a
+    sleeve or skirt block gets checked the same way without touching this
+    function. Measured across bust 800-1300mm, correct drafts match
+    exactly at the shoulder and within 0.6mm at the side seam.
+    """
+    by_id = {p.id: p for p in pieces}
+    failures: list[str] = []
+    seen: set[tuple[str, str]] = set()
+
+    for piece in pieces:
+        for edge in piece.edges:
+            if not edge.joins_to:
+                continue
+            target = edge.joins_to
+            if "." not in target:
+                failures.append(f"{piece.id}.{edge.id}: malformed joins_to {target!r}")
+                continue
+            other_piece_id, other_edge_id = target.split(".", 1)
+
+            key = tuple(sorted([f"{piece.id}.{edge.id}", target]))
+            if key in seen:
+                continue  # a pair declares itself from both sides; check it once
+            seen.add(key)
+
+            other = by_id.get(other_piece_id)
+            if other is None:
+                continue  # the partner piece isn't in this draft; not this check's business
+            mine, theirs = sewn_edge_length(piece, edge.id), sewn_edge_length(other, other_edge_id)
+            if mine is None or theirs is None:
+                failures.append(
+                    f"{piece.id}.{edge.id} joins {target}, which could not be measured"
+                )
+                continue
+            if abs(mine - theirs) > _SEAM_MATCH_TOLERANCE_MM:
+                failures.append(
+                    f"{piece.id}.{edge.id} ({mine:.1f}mm) and {target} ({theirs:.1f}mm) "
+                    f"are sewn together but differ by {abs(mine - theirs):.1f}mm "
+                    f"(tolerance {_SEAM_MATCH_TOLERANCE_MM}mm)"
+                )
+    return failures
+
+
+def check_ease(
+    pieces: list[PatternPiece], measurements: Measurements, intent: DesignIntent,
+) -> list[str]:
+    """The finished garment still has the ease it was drafted for.
+
+    Patternmaking's own final step after any alteration: re-measure bust
+    and waist to confirm you haven't silently added or lost ease. Dart
+    manipulation is the obvious risk — rotating intake to a new position
+    should conserve suppression exactly, and this is what proves it did.
+
+    The waist identity is NOT waist + ease_waist. This block draws its
+    rectangle at (bust + ease_bust)/2 from bustline to waistline, while
+    the dart calculation removes suppression based on RAW bust — so the
+    bust ease carries down to the waist, and the finished waist is
+    waist + ease_waist + ease_bust. That's a documented property of the
+    construction (see api/drafting/bodice.py), not slack in this check:
+    asserting the naive identity would reject every correct draft.
+    """
+    by_id = {p.id: p for p in pieces}
+    front, back = by_id.get("bodice_front"), by_id.get("bodice_back")
+    if front is None or back is None:
+        return []  # not a bodice pair; nothing this check knows how to measure
+
+    failures: list[str] = []
+    fm, bm = front.point_map(), back.point_map()
+
+    # Bust: each piece is a half, measured from its fold (x=0) out to the
+    # underarm, which sits on the bustline by construction.
+    try:
+        bust_finished = 2 * (fm["underarm_front"].x + bm["underarm_back"].x)
+    except KeyError:
+        bust_finished = None
+    if bust_finished is not None:
+        bust_expected = measurements.bust + intent.ease_bust_mm
+        if abs(bust_finished - bust_expected) > _EASE_TOLERANCE_MM:
+            failures.append(
+                f"finished bust {bust_finished:.1f}mm but the draft was made for "
+                f"{bust_expected:.1f}mm (bust {measurements.bust:.1f} + ease "
+                f"{intent.ease_bust_mm:.1f}) — off by {bust_finished - bust_expected:+.1f}mm"
+            )
+
+    waist_front, waist_back = sewn_edge_length(front, "waist"), sewn_edge_length(back, "waist")
+    if waist_front is not None and waist_back is not None:
+        waist_finished = 2 * (waist_front + waist_back)
+        waist_expected = measurements.waist + intent.ease_waist_mm + intent.ease_bust_mm
+        if abs(waist_finished - waist_expected) > _EASE_TOLERANCE_MM:
+            failures.append(
+                f"finished waist {waist_finished:.1f}mm but the draft was made for "
+                f"{waist_expected:.1f}mm (waist {measurements.waist:.1f} + waist ease "
+                f"{intent.ease_waist_mm:.1f} + bust ease {intent.ease_bust_mm:.1f}) — "
+                f"off by {waist_finished - waist_expected:+.1f}mm"
+            )
+    return failures
+
+
 def check_points_are_finite(pieces: list[PatternPiece]) -> list[str]:
     """NaN and inf propagate silently through geometry and only surface as
     an unrenderable PDF much later. A model returning "null" or a wild
@@ -244,15 +395,28 @@ def check_points_are_finite(pieces: list[PatternPiece]) -> list[str]:
     return failures
 
 
-def validate_pieces(pieces: list[PatternPiece]) -> ValidationResult:
+def validate_pieces(
+    pieces: list[PatternPiece],
+    measurements: Optional[Measurements] = None,
+    intent: Optional[DesignIntent] = None,
+) -> ValidationResult:
     """Every structural check, run together. Used both by the tests and by
-    the drafting path before an AI-adjusted draft is accepted."""
+    the drafting path before an AI-adjusted draft is accepted.
+
+    `measurements`/`intent` are optional because not every caller has
+    them: without them the geometry is still checked for shape and for
+    mated-seam agreement, and only the ease check — which needs to know
+    what the draft was made *for* — is skipped.
+    """
     failures = (
         check_points_are_finite(pieces)
         + check_armholes(pieces)
         + check_necklines_are_monotonic(pieces)
         + check_darts(pieces)
+        + check_mated_seams(pieces)
     )
+    if measurements is not None and intent is not None:
+        failures += check_ease(pieces, measurements, intent)
     return ValidationResult(ok=not failures, failures=failures)
 
 

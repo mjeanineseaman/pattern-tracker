@@ -759,13 +759,21 @@ block default", which is a better answer than a guess.
 
 | Parameter | Range | Applied to |
 |---|---|---|
-| `neckline_front_drop_mm` | 0–140 | `cf_neck.y` + the neckline cubic's controls |
-| `neckline_front_width_mm` | 0–60 | `front_neck_side.x` + shoulder start |
-| `neckline_back_drop_mm` | 0–120 | `cb_neck.y` + controls |
-| `neckline_back_width_mm` | 0–60 | `back_neck_side.x` |
+| `neckline_drop_front_mm` | 0–140 | `cf_neck.y` + the neckline cubic's controls |
+| `neckline_drop_back_mm` | 0–120 | `cb_neck.y` + controls |
+| `neckline_width_mm` | 0–60 | **both** `front_neck_side.x` and `back_neck_side.x` together |
 | `armhole_raise_mm` | 0–30 | `underarm_front` / `underarm_back`, armhole controls, side-seam start |
 | `hem_change_mm` | −150–0 | waist edge, dart legs, CF/CB and side-seam ends |
 | `waist_suppression` | 0.0–1.0 | scales waist-dart intake (0 = boxy, 1 = block default) |
+
+**Neckline width is deliberately one parameter, not two.** An earlier draft
+of this spec had independent front and back width, which directly breaks
+"ensure the front and back shoulder seams match in length when joined" —
+moving one neck point without the other shortens that shoulder relative to
+its partner and produces a pattern that cannot be sewn. Drop can differ
+front to back (that's what makes a scoop or a V); width cannot, because
+width is where the shoulder seam starts. The seam-walking check added to
+the validator catches this if it's ever reintroduced.
 
 Each gets its own pure function in a new `api/drafting/design.py`,
 signature `(pieces, value) -> pieces`, same purity rule as `bodice.py`: no
@@ -780,10 +788,12 @@ I/O, no model call, fully testable alone.
    points to preserve that tangent, and must be tested against
    `mirrored_outline()`, not just the half.
 2. **`hem_change_mm` is negative-only for now.** Cropping truncates above
-   the waist and is clean. *Lengthening* below the waist needs `hip` and
-   `waist_to_hip`, which are deliberately unmeasured (Phase 9.6b) — and a
-   flare decision the block has no basis for. Lengthening waits for the
-   skirt block.
+   the waist and is clean. Lengthening is not simply "extend the seams
+   straight down": the reference tutorial sets hem width from **mid-hip
+   circumference ÷ 4**, then lifts the side seam 1–3cm and curves the hem.
+   Straight-down extension on a fitted block gives a hem too tight over
+   the hip. That needs `hip` and `waist_to_hip`, both deliberately
+   unmeasured (Phase 9.6b), so lengthening waits for those measurements.
 3. **Armhole raise interacts with the validator.** Moving the underarm up
    changes the chord the concavity and bulge-ratio checks measure against.
    The 9.5 bounds were calibrated on unmodified drafts; they need
@@ -792,6 +802,32 @@ I/O, no model call, fully testable alone.
 
 **Done when:** two different croquis of sleeveless tops, same body, produce
 visibly different necklines and hems, and both pass the validator.
+
+### Tier 1b — The button stand, and why it isn't a parameter
+
+A shirt opens at centre front, which means a button stand extending past
+the CF line. This looks like one more Tier 1 parameter and isn't, because
+it changes something structural:
+
+**Centre front stops being a fold and becomes a cut edge.** Every bodice
+piece today is cut on the fold, and `mirrored_outline()` depends on it —
+it raises outright if a piece doesn't have exactly two points on the fold
+line, and the whole mirrored-cusp check (CLAUDE.md's neckline bug) is
+built on that assumption. A placket front is cut as a full piece with an
+extension, not a mirrored half.
+
+What that implies, and why it's its own step rather than a parameter:
+- `PatternPiece` needs to express "cut 1 full" versus "cut on fold" in a
+  way the exporter and the mirroring check both respect. `cut_mirrored`
+  exists on the dataclass already; nothing currently sets it per-design.
+- The fold-line tangent invariant stops applying to that edge, while
+  still applying to centre back.
+- The neckline's CF end becomes an ordinary endpoint, so the Tier 1
+  neckline functions need to know which case they're in.
+
+Worth building with the shirt, not before. Noted here so Tier 1's
+neckline work doesn't bake in a fold-only assumption that has to be
+unpicked later.
 
 ### Tier 2 — Dart manipulation
 
@@ -816,7 +852,15 @@ all present.
 
 **Done when:** rotating a dart changes where the seam falls while the
 mirrored outline's measured waist and bust stay within tolerance of the
-unrotated piece.
+unrotated piece — which `check_ease()` now verifies directly.
+
+**One open question for a human, not a model.** The reference tutorial says
+a bust dart should stop **20–30mm short of the apex** so it doesn't produce
+a point. Both darts in the current block stop at **10mm**. That's a Phase 2
+drafting-formula question, and CLAUDE.md is explicit that formulas need a
+person rather than a model averaging remembered numbers — so it's flagged,
+not changed. It matters more once darts are being rotated, since the apex
+distance is preserved through the pivot.
 
 ### Tier 3 — Style lines
 
@@ -844,6 +888,30 @@ What it needs that the others don't:
 **Done when:** a princess-seam croquis produces two front pieces whose
 joined outline matches the single-piece outline, and whose seam absorbs the
 bust-dart intake.
+
+### Prerequisite, now done: truing the seams
+
+Reviewing the human workflow surfaced that the validator never checked the
+most basic thing in patternmaking — whether two seams that get sewn
+together are the same length. Added ahead of any Phase 10 code, because
+every tier below moves points that sit on mated seams:
+
+- **`check_mated_seams()`** walks each edge's `joins_to` declaration and
+  compares *sewn* lengths, with darts along the edge closed. `joins_to`
+  existed in the schema from Phase 1 and had never been populated;
+  `bodice.py` now declares shoulder↔shoulder and side_seam↔side_seam, so
+  a sleeve or skirt block gets checked by the same code for free.
+- **`check_ease()`** re-measures finished bust and waist against what the
+  draft was made for — the "re-measure to confirm you haven't added or
+  lost ease" step. The waist identity is deliberately
+  `waist + ease_waist + ease_bust`, not the naive one: this block carries
+  bust ease down to the waistline, so asserting the obvious identity would
+  reject every correct draft. Measuring before writing the check is what
+  caught that.
+
+Tolerances measured across bust 800–1300mm on known-good drafts:
+shoulders match exactly, side seams within 0.60mm, bust ease exact, waist
+ease within 0.22mm. Both checks tolerate 2.0mm.
 
 ### Failure behaviour
 

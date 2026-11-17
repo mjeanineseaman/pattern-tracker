@@ -309,7 +309,10 @@ def adjust_draft(
             rejected,
         )
 
-    validation = validate_pieces(adjusted)
+    # measurements/intent included so the ease check runs: an adjustment
+    # that quietly changes finished bust or waist has altered the fit the
+    # draft was made for, which no purely structural check would catch.
+    validation = validate_pieces(adjusted, measurements, intent)
     if not validation.ok:
         # Wholesale rejection, never partial: a set of adjustments is one
         # argument about the geometry, and half of it is not a weaker

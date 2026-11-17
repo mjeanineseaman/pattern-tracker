@@ -10,7 +10,8 @@ import math
 from api.drafting.bodice import draft_bodice
 from api.drafting.validate import (
     _max_perpendicular_deviation, check_adjustment_magnitude, check_armholes,
-    check_darts, check_necklines_are_monotonic, check_points_are_finite, validate_pieces,
+    check_darts, check_ease, check_mated_seams, check_necklines_are_monotonic,
+    check_points_are_finite, sewn_edge_length, validate_pieces,
 )
 from api.schema import DesignIntent, FabricClass, GarmentType, Measurements, Point
 
@@ -268,6 +269,114 @@ def test_points_absent_from_the_original_are_not_magnitude_checked():
     after = [dataclasses.replace(piece, points=[*piece.points, Point("brand_new", 0.0, 0.0)]), *before[1:]]
 
     assert check_adjustment_magnitude(before, after, limit_mm=15.0) == []
+
+
+# --------------------------------------------------------------------------
+# Walking the seams — mated seams must be the same sewn length
+# --------------------------------------------------------------------------
+def test_a_real_draft_has_matching_mated_seams():
+    assert check_mated_seams(_pieces()) == []
+
+
+def test_sewn_length_closes_darts_along_the_edge():
+    """The back shoulder carries a dart, the front doesn't. Flat on paper
+    the back is longer; sewn, they're the same — which is the whole point
+    of measuring sewn length rather than polyline length."""
+    pieces = _pieces()
+    back = next(p for p in pieces if p.id == "bodice_back")
+    front = next(p for p in pieces if p.id == "bodice_front")
+
+    flat = sum(
+        math.dist(
+            (back.point_map()[s.start].x, back.point_map()[s.start].y),
+            (back.point_map()[s.end].x, back.point_map()[s.end].y),
+        )
+        for s in next(e for e in back.edges if e.id == "shoulder").segments
+    )
+    sewn = sewn_edge_length(back, "shoulder")
+
+    assert sewn < flat  # the dart span was removed
+    assert abs(sewn - sewn_edge_length(front, "shoulder")) < 0.01
+
+
+def test_widening_one_neckline_without_the_other_is_caught():
+    """The exact failure a parametric neckline change introduces: moving
+    front_neck_side outward shortens the front shoulder, and the two
+    seams can no longer be sewn together."""
+    broken = _move_point(_pieces(), "bodice_front", "front_shoulder_dart_leg_t", dx=12.0)
+
+    failures = check_mated_seams(broken)
+
+    assert any("shoulder" in f and "sewn together" in f for f in failures)
+
+
+def test_a_mismatched_side_seam_is_caught():
+    broken = _move_point(_pieces(), "bodice_front", "side_waist_front", dy=20.0)
+
+    assert any("side_seam" in f for f in check_mated_seams(broken))
+
+
+def test_a_missing_partner_piece_is_not_a_failure():
+    """Validating one piece alone (a sleeve drafted on its own, say)
+    shouldn't complain that its partner isn't present."""
+    front_only = [p for p in _pieces() if p.id == "bodice_front"]
+
+    assert check_mated_seams(front_only) == []
+
+
+# --------------------------------------------------------------------------
+# Ease conservation
+# --------------------------------------------------------------------------
+def _intent():
+    return DesignIntent(GarmentType.BODICE, FabricClass.WOVEN)
+
+
+def test_a_real_draft_conserves_the_ease_it_was_drafted_for():
+    assert check_ease(_pieces(), _measurements(), _intent()) == []
+
+
+def test_ease_holds_across_body_sizes():
+    intent = _intent()
+    for bust in (800.0, 950.0, 1100.0, 1300.0):
+        m = Measurements(bust=bust, waist=bust - 63.5, back_length=355.6,
+                         bust_height=279.4, bust_span=190.5)
+        assert check_ease(draft_bodice(m, intent), m, intent) == [], f"bust={bust}"
+
+
+def test_losing_width_at_the_bust_is_caught():
+    """Pulling the underarm in narrows the finished garment — the draft no
+    longer has the ease it was made for, and no structural check notices."""
+    broken = _move_point(_pieces(), "bodice_front", "underarm_front", dx=-15.0)
+
+    assert any("finished bust" in f for f in check_ease(broken, _measurements(), _intent()))
+
+
+def test_changing_waist_suppression_is_caught():
+    """Dart manipulation must conserve suppression. Widening a waist dart
+    without compensating elsewhere removes real width from the garment."""
+    pieces = _pieces()
+    back = next(p for p in pieces if p.id == "bodice_back")
+    dart = next(d for d in back.darts if d.id == "back_waist_dart")
+    broken = _move_point(pieces, "bodice_back", dart.leg_a, dx=-18.0)
+
+    assert any("finished waist" in f for f in check_ease(broken, _measurements(), _intent()))
+
+
+def test_ease_is_skipped_when_the_draft_context_is_unknown():
+    """validate_pieces without measurements still checks geometry — it
+    just can't know what ease the draft was aiming for."""
+    result = validate_pieces(_pieces())
+
+    assert result.ok
+
+
+def test_validate_pieces_runs_the_ease_check_when_given_context():
+    broken = _move_point(_pieces(), "bodice_front", "underarm_front", dx=-15.0)
+
+    result = validate_pieces(broken, _measurements(), _intent())
+
+    assert not result.ok
+    assert any("finished bust" in f for f in result.failures)
 
 
 def test_validate_pieces_collects_failures_from_every_check():
