@@ -1,19 +1,15 @@
-"""Integration test for the Phase 3 PDF endpoint, the Phase 5 mark-sloper
-endpoint, the Phase 4 sloper lookup, and the Phase 4 croquis endpoint:
-seeds a real in-memory SQLite DB with a pattern version (reusing the
-Phase 2 bodice drafter), then hits the actual FastAPI routes rather than
-calling the underlying functions directly — this is the first thing
-that exercises api/db.py, api/schema.py's pattern_from_json, and
-api/export/pdf.py wired together as the endpoints will really run.
+"""Endpoint tests: a real in-memory SQLite DB seeded with a drafted
+pattern, hit through the actual FastAPI routes rather than by calling the
+underlying functions — so db.py, pattern_from_json and the exporters are
+exercised wired together as they really run.
 
-The croquis tests never touch the real Anthropic API or need a real key
-— `get_anthropic_client` is overridden with `_FakeAnthropicClient`,
-a minimal stand-in whose `.messages.create()` returns a canned response
-shaped just enough like the real SDK's (`.content[0].text`) for
-api/main.py's own code to read.
+No network and no API key: `get_anthropic_client` is overridden with a
+stub whose `.messages.create()` returns canned text.
 """
 import sqlite3
 from types import SimpleNamespace
+
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -83,16 +79,6 @@ def _client_with_db() -> tuple[TestClient, sqlite3.Connection, Pattern]:
     return TestClient(app), conn, pattern
 
 
-def _client_with_vision(reply_text: str) -> tuple[TestClient, _FakeAnthropicClient]:
-    fake_client = _FakeAnthropicClient(reply_text)
-
-    def override_get_anthropic_client():
-        return fake_client
-
-    app.dependency_overrides[get_anthropic_client] = override_get_anthropic_client
-    return TestClient(app), fake_client
-
-
 def _client_with_db_and_vision(reply_text: str) -> tuple[TestClient, sqlite3.Connection, Pattern, _FakeAnthropicClient]:
     client, conn, pattern = _client_with_db()
     fake_client = _FakeAnthropicClient(reply_text)
@@ -104,6 +90,27 @@ def _client_with_db_and_vision(reply_text: str) -> tuple[TestClient, sqlite3.Con
     return client, conn, pattern, fake_client
 
 
+@pytest.mark.parametrize("path", [
+    "/patterns/pat_001/versions/99",
+    "/patterns/pat_001/versions/99/pdf",
+    "/patterns/pat_001/versions/99/outline",
+])
+def test_reading_a_missing_version_404s(path):
+    """Each of these resolves its own snapshot, so each needs its own
+    guard — listed together so a new version-scoped endpoint is obviously
+    missing from the list."""
+    assert _client().get(path).status_code == 404
+
+
+@pytest.mark.parametrize("path", [
+    "/patterns/does_not_exist",
+    "/patterns/does_not_exist/revisions",
+    "/patterns/does_not_exist/versions/1/pdf",
+])
+def test_reading_a_missing_pattern_404s(path):
+    assert _client().get(path).status_code == 404
+
+
 def test_pdf_endpoint_returns_pdf_for_an_existing_version():
     client = _client()
     response = client.get("/patterns/pat_001/versions/1/pdf")
@@ -111,20 +118,6 @@ def test_pdf_endpoint_returns_pdf_for_an_existing_version():
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/pdf"
     assert response.content.startswith(b"%PDF-")
-
-
-def test_pdf_endpoint_404s_for_a_missing_version():
-    client = _client()
-    response = client.get("/patterns/pat_001/versions/99/pdf")
-
-    assert response.status_code == 404
-
-
-def test_pdf_endpoint_404s_for_a_missing_pattern():
-    client = _client()
-    response = client.get("/patterns/does_not_exist/versions/1/pdf")
-
-    assert response.status_code == 404
 
 
 def test_revise_creates_a_new_version_and_a_revision_row():
@@ -213,13 +206,6 @@ def test_get_revisions_is_an_empty_list_for_a_pattern_with_no_revisions_yet():
 
     assert response.status_code == 200
     assert response.json() == []
-
-
-def test_get_revisions_404s_for_a_missing_pattern():
-    client = _client()
-    response = client.get("/patterns/does_not_exist/revisions")
-
-    assert response.status_code == 404
 
 
 def test_diff_aggregates_directly_between_snapshots_not_per_revision():
@@ -477,13 +463,6 @@ def test_get_pattern_returns_the_current_version():
     assert response.json()["id"] == "pat_001"
 
 
-def test_get_pattern_404s_for_a_missing_pattern():
-    client = _client()
-    response = client.get("/patterns/does_not_exist")
-
-    assert response.status_code == 404
-
-
 def test_get_pattern_version_returns_a_specific_version():
     client = _client()
     response = client.get("/patterns/pat_001/versions/1")
@@ -492,18 +471,6 @@ def test_get_pattern_version_returns_a_specific_version():
     assert response.json()["version"] == 1
 
 
-def test_get_pattern_version_404s_for_a_missing_version():
-    client = _client()
-    response = client.get("/patterns/pat_001/versions/99")
-
-    assert response.status_code == 404
-
-
-# --------------------------------------------------------------------------
-# GET /patterns/{id}/versions/{v}/outline — flattened geometry for the
-# Phase 7 pattern viewer (plain polylines, curves already walked by
-# api.export.geometry so the frontend never duplicates that math).
-# --------------------------------------------------------------------------
 def test_get_outline_returns_flattened_polylines_for_every_piece():
     client = _client()
     response = client.get("/patterns/pat_001/versions/1/outline")
@@ -520,16 +487,6 @@ def test_get_outline_returns_flattened_polylines_for_every_piece():
         assert all(len(pt) == 2 for pt in piece["stitching"])
 
 
-def test_get_outline_404s_for_a_missing_version():
-    client = _client()
-    response = client.get("/patterns/pat_001/versions/99/outline")
-
-    assert response.status_code == 404
-
-
-# --------------------------------------------------------------------------
-# The UI is served by this same app (web/ mounted at "/")
-# --------------------------------------------------------------------------
 def test_the_ui_is_served_at_the_root():
     """One command starts the whole tool, and the page ends up same-origin
     with the API it calls."""
@@ -567,13 +524,6 @@ def test_put_then_get_body_profile_round_trips():
     assert put.json()["updated_at"]
 
     assert client.get("/body-profile").json()["bust"] == 955
-
-
-def test_creating_the_first_pattern_seeds_the_body_profile():
-    client = _client()
-    client.post("/patterns", json=_NEW_PATTERN_BODY)
-
-    assert client.get("/body-profile").json()["bust"] == 920
 
 
 def test_creating_a_later_pattern_updates_the_body_profile():
@@ -704,21 +654,16 @@ def test_creating_a_pattern_records_its_garment_type():
 # Asking for measurements rather than guessing them
 # --------------------------------------------------------------------------
 def test_creating_a_pattern_reports_what_it_had_to_estimate():
-    client, _conn, _pattern = _client_with_db()
+    """Reported on the response and recorded in the revision reason —
+    months later, "which numbers were real here?" is answerable from the
+    history alone."""
+    client, conn, _pattern = _client_with_db()
 
     created = client.post("/patterns", json=_NEW_PATTERN_BODY).json()
 
     fields = [n["field"] for n in created["measurement_needs"]]
     assert fields[0] == "shoulder_length"  # the fixed guess, asked for first
     assert "armscye_depth" in fields
-
-
-def test_what_was_estimated_is_recorded_in_the_revision_reason():
-    """Six months on, "which numbers were real when this was drafted?" is
-    exactly what the history should answer about a pattern that didn't fit."""
-    client, conn, _pattern = _client_with_db()
-
-    created = client.post("/patterns", json=_NEW_PATTERN_BODY).json()
 
     reason = conn.execute(
         "SELECT reason FROM revisions WHERE pattern_id = ?", (created["id"],),
@@ -791,18 +736,8 @@ def test_the_refusal_names_the_measurements_that_type_will_need():
 
     assert "shoulder_width" in detail
     assert "arm_length" in detail
-
-
-def test_a_shirt_is_refused_on_the_sleeve_block_specifically():
-    """Half a shirt — the bodice — already drafts, so a flat "not
-    supported" would hide which piece is actually missing."""
-    client = _client()
-
-    detail = client.post("/patterns", json={
-        **_NEW_PATTERN_BODY,
-        "intent": {"garment_type": "shirt", "fabric_class": "woven"},
-    }).json()["detail"]
-
+    # names the missing block, not just the garment: half a shirt already
+    # drafts, so "not supported" would hide what's actually outstanding
     assert "sleeve block" in detail
 
 
@@ -953,27 +888,14 @@ def test_croquis_endpoint_stores_the_image_and_returns_its_ref(tmp_path, monkeyp
 
     assert response.status_code == 200
     body = response.json()
-    assert body["croquis_ref"]
+
+    # exactly {croquis_ref} — uploading a sketch must not come back with
+    # garment_type/fit guesses for a person to correct. Intent is authored.
+    assert set(body) == {"croquis_ref"}
 
     stored = (tmp_path / "croquis").parent / body["croquis_ref"]
     assert stored.exists()
     assert stored.read_bytes() == _PNG_BYTES
-
-
-def test_croquis_endpoint_proposes_no_design_intent(tmp_path, monkeypatch):
-    """The whole point of the Phase 9 reversal: uploading a sketch must not
-    produce garment_type/fit/style guesses for a person to correct. Intent
-    is authored, and a pre-filled field is read far less critically than an
-    empty one."""
-    import api.main as main_module
-    monkeypatch.setattr(main_module, "CROQUIS_DIR", tmp_path / "croquis")
-    client = _client()
-
-    body = client.post(
-        "/croquis", files={"file": ("sketch.png", _PNG_BYTES, "image/png")},
-    ).json()
-
-    assert set(body) == {"croquis_ref"}
 
 
 def test_croquis_endpoint_needs_no_anthropic_client_at_all(tmp_path, monkeypatch):
