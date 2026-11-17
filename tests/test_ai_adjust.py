@@ -9,7 +9,6 @@ No network and no API key: the client is a stub, the same pattern the rest
 of the suite uses.
 """
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 from api.drafting.ai_adjust import (

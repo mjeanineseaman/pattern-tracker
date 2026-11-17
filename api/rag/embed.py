@@ -1,17 +1,13 @@
-"""Local embeddings for `Revision.embedding_text()` — hashed bag-of-words
-("the hashing trick"), not a call to a semantic embeddings API. See
-CLAUDE.md's "Why local embeddings, not a semantic embeddings API" for why:
-in short, Anthropic has no embeddings endpoint, and Voyage/OpenAI were
-considered and rejected as adding a second paid provider and a network call
-per revision to a project that's explicitly local-only, personal-scale, and
-already wary of vector-search infrastructure for a few hundred rows.
+"""Local hashed bag-of-words embeddings, not a semantic embeddings API.
 
-No vocabulary table and no training step: each token hashes into one of
-DIMENSIONS buckets via a stable hash, so a text embeds independently of
-whatever else has ever been embedded. `MODEL_NAME` is recorded alongside
-every stored vector (schema.py's `revision_embeddings.model` column)
-specifically so a later swap to a real embeddings API doesn't require
-guessing which rows were produced which way.
+Anthropic has no embeddings endpoint, and Voyage/OpenAI were rejected as a
+second paid provider plus a network call per revision, for a local-only
+project at personal scale. See CLAUDE.md for the full reasoning.
+
+No vocabulary table, no training step: each token hashes into one of
+DIMENSIONS buckets, so a text embeds independently of everything else.
+MODEL_NAME is stored per vector so a later swap doesn't require guessing
+which rows came from which method.
 """
 from __future__ import annotations
 
@@ -90,33 +86,3 @@ def embed_and_store_revision(db: sqlite3.Connection, revision: Revision) -> None
     """Does not commit — callers (api.main's /revise, backfill below) are
     expected to do that themselves as part of their own transaction."""
     store_embedding(db, revision.id, embed_revision(revision))
-
-
-def backfill_missing_embeddings(db: sqlite3.Connection) -> int:
-    """PLAN.md Phase 6: embed any revision written before this phase existed
-    (or from any other gap — a failed /revise commit between the revisions
-    insert and the embedding call, say). Idempotent: re-running finds
-    nothing left to do once caught up, since every revision this embeds is
-    immediately no longer "missing". Returns how many were embedded."""
-    rows = db.execute(
-        """
-        SELECT r.id, r.pattern_id, r.version, r.parent_version, r.change_type, r.source,
-               r.deltas_json, r.reason, r.fit_notes, r.created_at
-        FROM revisions r
-        LEFT JOIN revision_embeddings e ON e.revision_id = r.id
-        WHERE e.revision_id IS NULL
-        """,
-    ).fetchall()
-    for row in rows:
-        embed_and_store_revision(db, revision_from_row(row))
-    db.commit()
-    return len(rows)
-
-
-if __name__ == "__main__":
-    from api.db import get_connection
-
-    _conn = get_connection()
-    _n = backfill_missing_embeddings(_conn)
-    print(f"embedded {_n} revision(s)")
-    _conn.close()

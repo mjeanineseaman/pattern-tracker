@@ -1,31 +1,18 @@
-"""The AI drafting step (PLAN.md Phase 9.4).
+"""The AI drafting step — the only place a model touches geometry.
 
-This is the only place in the project where a model touches geometry, and
-it is deliberately the narrowest possible version of that.
+The model proposes bounded `{piece, point, dx, dy, reason}` deltas against
+an already-valid draft and never emits coordinates. A delta can be
+range-checked; a regenerated coordinate set can only be re-validated
+wholesale, which is how Phase 2's armhole passed every check while being
+thirty times too deep. Deltas also reuse the FieldDelta shape a manual
+edit produces, so an AI adjustment needs no new machinery to appear in the
+timeline, the diff view or the RAG index.
 
-**The model proposes bounded deltas; this module applies them.** It never
-emits coordinates. It receives a complete, already-valid draft from
-api.drafting.bodice plus the body model, the garment's learnings, the
-author's design intent and the croquis image, and returns a list of
-`{piece, point, dx, dy, reason}` adjustments. Why that shape:
+Everything fails toward the formula draft: no key, no network, bad JSON, a
+failed validation. Drafting must not become unavailable because an API
+call did.
 
-- A delta can be range-checked. A regenerated coordinate set can only be
-  re-validated wholesale, which is exactly how Phase 2's armhole passed
-  every automated check while being thirty times too deep.
-- It produces the same `FieldDelta` shape a manual edit does, so an AI
-  adjustment appears in the timeline, the diff view and the RAG index with
-  no new machinery.
-- Rejecting it costs nothing: the formula draft is still right there.
-
-**Everything fails toward the formula draft.** No key, no network, bad
-JSON, a proposal that fails validation — all of them return the unadjusted
-draft with an explanation. Drafting must not become unavailable because an
-API call did.
-
-CLAUDE.md's purity rule still holds: `draft_bodice()` and friends remain
-pure functions with no I/O. This module is the orchestration layer that
-calls them and then talks to the network, which is why it lives beside
-them rather than inside them.
+`draft_bodice()` stays pure; this is the orchestration layer around it.
 """
 from __future__ import annotations
 
@@ -90,9 +77,8 @@ class Adjustment:
 
 @dataclass
 class AdjustmentOutcome:
-    """What the drafting step did, in enough detail to put in a revision's
-    reason — the whole point being that the model's contribution is visible
-    in the timeline rather than baked invisibly into the geometry."""
+    """Detailed enough to put in a revision's reason, so the model's
+    contribution is visible rather than baked into the geometry."""
     pieces: list[PatternPiece]
     applied: list[Adjustment]
     rejected: list[str]
@@ -111,8 +97,8 @@ def _strip_fences(text: str) -> str:
 
 
 def describe_pieces(pieces: Sequence[PatternPiece]) -> str:
-    """The draft, as the model sees it: point ids and coordinates, plus
-    which darts reference which points so a dart can be moved coherently."""
+    """Point ids and coordinates, plus which darts reference which points
+    so a dart can be moved coherently."""
     lines = []
     for piece in pieces:
         lines.append(f'piece "{piece.id}" ({piece.name}):')
@@ -156,9 +142,8 @@ def build_prompt(
 
 
 def parse_adjustments(raw_text: str) -> list[Adjustment]:
-    """Parse the model's reply. Raises ValueError on anything malformed —
-    the caller turns that into "fall back to the formula draft" rather
-    than retrying blindly."""
+    """Raises ValueError on anything malformed; the caller turns that into
+    a fallback rather than retrying blindly."""
     parsed = json.loads(_strip_fences(raw_text))
     if not isinstance(parsed, list):
         raise ValueError(f"expected a JSON array, got {type(parsed).__name__}")
@@ -187,14 +172,13 @@ def parse_adjustments(raw_text: str) -> list[Adjustment]:
 def apply_adjustments(
     pieces: Sequence[PatternPiece], adjustments: Sequence[Adjustment],
 ) -> tuple[list[PatternPiece], list[Adjustment], list[str]]:
-    """Apply adjustments that name real points. Returns the new pieces, the
-    ones applied, and complaints about the ones that weren't.
+    """Returns the new pieces, the adjustments applied, and complaints
+    about the ones that weren't.
 
-    An unrecognised piece/point id is dropped individually rather than
-    failing the batch — a model naming one point that doesn't exist
-    shouldn't throw away four good adjustments alongside it. Structural
-    breakage is caught afterwards by the validator, which does reject
-    wholesale.
+    An unrecognised id is dropped individually rather than failing the
+    batch — one bad point shouldn't discard four good adjustments.
+    Structural breakage is caught afterwards by the validator, which does
+    reject wholesale.
     """
     by_point: dict[tuple[str, str], Adjustment] = {}
     rejected: list[str] = []
@@ -222,9 +206,8 @@ def apply_adjustments(
 
 
 def _image_block(croquis_path: Optional[Path]) -> Optional[dict[str, Any]]:
-    """The sketch, if it's still on disk. Shows the model what the text
-    fields can't — how deep the neckline really sits, where a seam falls.
-    A missing file is not an error: the pattern outlives the upload."""
+    """The sketch, if it's still on disk. A missing file is not an error:
+    the pattern outlives the upload."""
     if croquis_path is None or not croquis_path.is_file():
         return None
     suffix = croquis_path.suffix.lower()
@@ -252,12 +235,10 @@ def adjust_draft(
     learnings: Sequence[str],
     croquis_path: Optional[Path] = None,
 ) -> AdjustmentOutcome:
-    """Ask the model to apply this body's learnings to a formula draft.
+    """Apply this body's learnings to a formula draft.
 
-    Always returns a usable set of pieces. Every failure path — no key, no
-    network, unparseable JSON, an oversized move, geometry that fails
-    validation — returns the ORIGINAL draft with a note saying why, rather
-    than raising. The note ends up in the version's revision reason.
+    Always returns usable pieces: every failure path returns the original
+    draft with a note saying why, which ends up in the revision reason.
     """
     def fallback(note: str, rejected: Optional[list[str]] = None) -> AdjustmentOutcome:
         return AdjustmentOutcome(

@@ -1,18 +1,11 @@
-"""The body model (PLAN.md Phase 9.1): current best known measurements for
-one body.
+"""The body model: current best known measurements for one body.
 
-Distinct from a pattern version's `Measurements` snapshot, which records
-what was true when that version was drafted. The profile is what's true
-*now* — it's what a new pattern starts from, and what a fitting
-correction updates.
+Distinct from a pattern version's `Measurements` snapshot, which is what
+was true when that version was drafted.
 
-Holds measured facts only. "This body needs 4mm more back shoulder dart"
-is an inference drawn from a fitting, not a measurement, and belongs in
-api.learnings instead. Keeping the two apart is what makes the profile
-auditable: every number in it was measured, not derived.
-
-No LLM call anywhere in this module. A measurement is a fact you read off
-a tape, and the one person using this tool is the one who measured it.
+Holds measured facts only — "needs 4mm more back shoulder dart" is an
+inference from a fitting and belongs in api.learnings. Keeping them apart
+is what makes the profile auditable.
 """
 from __future__ import annotations
 
@@ -72,13 +65,9 @@ def profile_changes(
 ) -> list[dict[str, object]]:
     """What a save would change, as {field, from, to} entries.
 
-    Exists so an overwrite is never silent. Submitting the create form
-    replaces the profile wholesale, which is what makes the form the one
-    place you maintain your measurements — but it also means a submission
-    missing `armscye_depth` clears a value that was genuinely measured,
-    and the draft quietly goes back to estimating it. Reporting the change
-    (including a value becoming None) makes that visible and recoverable
-    instead of a silent regression in fit.
+    A submission omitting an optional measurement clears one that was
+    genuinely taken, sending the draft back to estimating it. Reporting
+    that makes the regression visible rather than silent.
     """
     changes: list[dict[str, object]] = []
     for f in dataclasses.fields(Measurements):
@@ -90,14 +79,10 @@ def profile_changes(
 
 
 def _differs(old: Optional[float], new: Optional[float]) -> bool:
-    """Whether two stored measurements are meaningfully different.
-
-    Not `!=`: a value converted from inches is stored as 800.0999999999999,
-    shown in the UI as 80.01cm, and submitted back as 800.1. Plain equality
-    reports that as an edit, so touching one field appeared to change three.
-    The epsilon is far below both the 0.1mm display rounding and anything a
-    tape measure resolves, so a real edit (0.1cm minimum through the form)
-    can't hide underneath it.
+    """Not `!=`: a value converted from inches stores as 800.0999999999999,
+    displays as 80.01cm and returns as 800.1, so equality reported editing
+    one field as changing three. The epsilon sits below the 0.1mm display
+    rounding and the 0.1cm minimum edit the form can make.
     """
     if old is None or new is None:
         return old is not new
@@ -109,14 +94,10 @@ def update_profile(
     measurements: Measurements,
     profile_id: str = DEFAULT_PROFILE_ID,
 ) -> list[dict[str, object]]:
-    """Replace the body model with these measurements, and report what
-    changed.
+    """Replace the body model and report what changed.
 
-    Unconditional by design: the measurements you submit when creating a
-    pattern become your profile. An earlier version only seeded when no
-    profile existed, which meant the form showed your measurements,
-    accepted an edit to them, and then silently discarded it — the profile
-    could only be corrected through a revision or a direct PUT.
+    Unconditional: the measurements submitted when creating a pattern
+    become the profile, so an edit made in that form sticks.
     """
     changes = profile_changes(get_profile(db, profile_id), measurements)
     save_profile(db, measurements, profile_id)
@@ -128,17 +109,12 @@ def apply_measurement_deltas(
     deltas: list[FieldDelta],
     profile_id: str = DEFAULT_PROFILE_ID,
 ) -> list[str]:
-    """Step 5 of the intended flow: a revision that changes a measurement
-    changes the body, so it updates the model.
+    """A revision that changes a measurement changes the body.
 
-    Only `measurements.*` paths are considered — a dart moving is a
-    pattern change, not a body change, even though both arrive in the same
-    revision. Returns the field names updated, so the caller can say what
-    happened rather than silently mutating the profile.
-
-    No-ops when there's no profile yet: there's nothing to correct, and
-    inventing one from a partial delta set would produce a profile whose
-    untouched fields were never actually measured.
+    Only `measurements.*` paths count — a dart moving is a pattern change,
+    not a body change, even arriving in the same revision. No-ops without a
+    profile: inventing one from a partial delta set would leave untouched
+    fields holding numbers nobody measured.
     """
     current = get_profile(db, profile_id)
     if current is None:

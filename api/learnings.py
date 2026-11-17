@@ -1,25 +1,17 @@
-"""Garment learnings (PLAN.md Phase 9.2): what past fittings taught us
-about this body, scoped by garment type.
+"""What past fittings taught about this body, scoped by garment type.
 
-Distinct from the revisions table. A revision is a *fact* — what changed
-on this pattern on this date. A learning is an *inference* — what this
-body seems to need, carried forward to the next garment of the same kind.
-Every learning keeps the revision id it came from, so an inference can
-always be traced back to the observation behind it.
+A revision is a fact — what changed, when. A learning is an inference —
+what this body needs, carried to the next garment of the same kind. Each
+keeps its source revision id so the inference stays traceable.
 
-**What gates a learning, and why it matters.** Only a revision recorded as
-`MUSLIN_FITTING` becomes one. A `MANUAL` or `AI_ADJUST` revision is a
-design change or a guess — worth keeping in history and answerable via
-/ask, but not evidence about a body. Without that gate a single
-speculative edit propagates into every future garment with no muslin ever
-having validated it, which is exactly what CLAUDE.md's "things that need a
-human" section exists to prevent.
+Only a MUSLIN_FITTING revision becomes one. A MANUAL or AI_ADJUST revision
+is a design change or a guess: worth keeping in history and answerable via
+/ask, but not evidence about a body. Without that gate one speculative
+edit propagates into every future garment unvalidated.
 
-No LLM call here. The learning text is the sewist's own `reason` and
-`fit_notes` — the words written right after taking a muslin off a body are
-already the lesson, and paraphrasing them through a model would add a
-hallucination surface to the one part of this system that is pure
-first-hand observation.
+No LLM call here — the words written right after taking a muslin off a
+body are already the lesson, and paraphrasing them would add a
+hallucination surface to the one purely first-hand part of this system.
 """
 from __future__ import annotations
 
@@ -53,9 +45,8 @@ class Learning:
 
 
 def learning_text(revision: Revision) -> str:
-    """The lesson, in the sewist's own words. `reason` is why the change
-    was made; `fit_notes` is what the body actually did — both matter, and
-    the second is usually the more transferable half."""
+    """`reason` is why the change was made, `fit_notes` is what the body
+    did — the second is usually the more transferable half."""
     parts = [revision.reason.strip(), revision.fit_notes.strip()]
     return " ".join(p for p in parts if p)
 
@@ -71,13 +62,10 @@ def _row_to_learning(row: tuple) -> Learning:
 def learnings_for(
     db: sqlite3.Connection, garment_type: str, limit: int = 10,
 ) -> list[Learning]:
-    """What to feed the drafting step, most-confirmed first.
-
-    Ordered by `times_confirmed` rather than ranked by embedding
-    similarity. At personal scale a garment type accumulates a handful of
-    lessons, not thousands — "the corrections this body has needed most
-    often" is both more useful and more honest than a cosine ranking over
-    a set small enough to read in full. See PLAN.md 9.3.
+    """Most-confirmed first, rather than ranked by embedding similarity: a
+    garment type accumulates a handful of lessons, not thousands, and "what
+    this body needed most often" beats a cosine ranking over a set small
+    enough to read in full.
     """
     rows = db.execute(
         """
@@ -95,12 +83,9 @@ def learnings_for(
 def record_learning(
     db: sqlite3.Connection, revision: Revision, garment_type: str,
 ) -> Learning | None:
-    """Turn a fitting observation into a learning, or confirm an existing one.
-
-    Returns the learning written or confirmed, or None when the revision
-    isn't evidence (see the gate in the module docstring). Does not commit
-    — the caller owns the transaction, so a learning and the revision that
-    produced it land together or not at all.
+    """Returns the learning written or confirmed, or None when the revision
+    isn't evidence. Does not commit: the caller owns the transaction, so a
+    learning and the revision behind it land together or not at all.
     """
     if not is_evidence(revision):
         return None
@@ -146,15 +131,13 @@ def record_learning(
 def _find_similar(
     db: sqlite3.Connection, garment_type: str, text: str,
 ) -> Learning | None:
-    """The same lesson written twice in slightly different words should
-    raise its confirmation count, not add a second row.
+    """The same lesson in different words should raise the confirmation
+    count, not add a row.
 
-    Reuses the local hashed bag-of-words embedder rather than exact string
-    matching: "the back pulled across the shoulder blade again" and "back
-    pulled across the shoulder blades" are the same observation, and
-    neither is a substring of the other. Lexical overlap is a good fit
-    here specifically because both texts come from one person describing
-    one body in their own consistent vocabulary (see CLAUDE.md).
+    Uses the local embedder rather than string matching: "pulled across the
+    shoulder blade again" and "pulled across the shoulder blades" are the
+    same observation and neither contains the other. Lexical overlap works
+    here because both come from one person's consistent vocabulary.
     """
     candidate = embed_text(text)
     best: Learning | None = None

@@ -41,10 +41,8 @@ def retrieve(
     agree, so plain string comparison in SQL is correct without parsing.
     Either may be omitted.
 
-    A revision with no stored embedding yet (shouldn't happen once
-    embedding is wired into /revise, but a defensive case — see
-    embed.backfill_missing_embeddings) is skipped rather than crashing or
-    silently scoring it 0 alongside genuinely dissimilar revisions.
+    A revision with no stored embedding is skipped rather than silently
+    scoring 0 alongside genuinely dissimilar ones.
     """
     sql = (
         "SELECT r.id, r.pattern_id, r.version, r.parent_version, r.change_type, r.source, "

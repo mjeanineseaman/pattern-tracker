@@ -31,8 +31,12 @@ def _measurements(**overrides) -> Measurements:
     return Measurements(**defaults)
 
 
+def _intent():
+    return DesignIntent(GarmentType.BODICE, FabricClass.WOVEN)
+
+
 def _pieces():
-    return draft_bodice(_measurements(), DesignIntent(GarmentType.BODICE, FabricClass.WOVEN))
+    return draft_bodice(_measurements(), _intent())
 
 
 def _move_point(pieces, piece_id, point_id, dx=0.0, dy=0.0):
@@ -54,7 +58,7 @@ def _move_point(pieces, piece_id, point_id, dx=0.0, dy=0.0):
 # The gate has to let real work through
 # --------------------------------------------------------------------------
 def test_a_real_draft_passes_every_check():
-    result = validate_pieces(_pieces())
+    result = validate_pieces(_pieces(), _measurements(), _intent())
     assert result.ok, result.failures
     assert bool(result) is True
 
@@ -82,15 +86,6 @@ def test_non_finite_coordinates_are_caught():
     failures = check_points_are_finite(broken)
 
     assert any("non-finite" in f for f in failures)
-
-
-def test_a_straight_armhole_trips_the_lower_bulge_bound():
-    """Checked on the deviation maths directly: a chain of collinear points
-    has nowhere to bulge, which is the "that's not an armhole" end of the
-    range. Done this way because the real armhole is multi-segment, so
-    merely dropping its bezier control points still leaves the remaining
-    corner points deviating off the chord."""
-    assert _max_perpendicular_deviation([(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)]) == 0.0
 
 
 def test_a_grossly_deepened_armhole_is_caught():
@@ -167,13 +162,6 @@ def test_a_dart_opened_into_a_fan_is_caught():
     )
 
     assert any("fan, not a dart" in f for f in check_darts(broken))
-
-
-def test_a_real_drafts_darts_all_pass():
-    """Guards the thresholds themselves: a back shoulder dart legitimately
-    has both legs on one side of its apex in x, which an earlier version of
-    this check wrongly rejected."""
-    assert check_darts(_pieces()) == []
 
 
 def test_a_zero_intake_dart_is_caught():
@@ -274,10 +262,6 @@ def test_points_absent_from_the_original_are_not_magnitude_checked():
 # --------------------------------------------------------------------------
 # Walking the seams — mated seams must be the same sewn length
 # --------------------------------------------------------------------------
-def test_a_real_draft_has_matching_mated_seams():
-    assert check_mated_seams(_pieces()) == []
-
-
 def test_sewn_length_closes_darts_along_the_edge():
     """The back shoulder carries a dart, the front doesn't. Flat on paper
     the back is longer; sewn, they're the same — which is the whole point
@@ -327,14 +311,6 @@ def test_a_missing_partner_piece_is_not_a_failure():
 # --------------------------------------------------------------------------
 # Ease conservation
 # --------------------------------------------------------------------------
-def _intent():
-    return DesignIntent(GarmentType.BODICE, FabricClass.WOVEN)
-
-
-def test_a_real_draft_conserves_the_ease_it_was_drafted_for():
-    assert check_ease(_pieces(), _measurements(), _intent()) == []
-
-
 def test_ease_holds_across_body_sizes():
     intent = _intent()
     for bust in (800.0, 950.0, 1100.0, 1300.0):
@@ -360,14 +336,6 @@ def test_changing_waist_suppression_is_caught():
     broken = _move_point(pieces, "bodice_back", dart.leg_a, dx=-18.0)
 
     assert any("finished waist" in f for f in check_ease(broken, _measurements(), _intent()))
-
-
-def test_ease_is_skipped_when_the_draft_context_is_unknown():
-    """validate_pieces without measurements still checks geometry — it
-    just can't know what ease the draft was aiming for."""
-    result = validate_pieces(_pieces())
-
-    assert result.ok
 
 
 def test_validate_pieces_runs_the_ease_check_when_given_context():

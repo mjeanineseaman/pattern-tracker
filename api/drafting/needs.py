@@ -1,21 +1,15 @@
 """Which measurements the draft is estimating rather than using.
 
-`Measurements` carries a handful of optional fields. When one is unset the
-bodice draft falls back to deriving it — usually from bust, in one case
-from a flat constant. Those fallbacks are reasonable defaults, but they
-are guesses about a body, and a guess about a body produces a garment that
-needs more fitting than it should have.
+When an optional field is unset the draft derives it — usually from bust,
+in one case from a flat constant. Those are guesses about a body, and a
+guess produces a garment needing more fitting than it should.
 
-The project's standing rule is that drafting formulas need a human rather
-than a model averaging remembered numbers (CLAUDE.md, "things that need a
-human"). This module applies the same logic one level up: rather than
-quietly tuning a fallback formula until the output looks plausible, use
-every measurement that *is* available and tell the sewist which missing
-one would most improve the next draft. Asking for a number costs one pass
-with a tape measure; guessing it costs a muslin.
+Rather than tuning a fallback until the output looks plausible, use every
+measurement available and say which missing one would most improve the
+next draft. Asking costs one pass with a tape; guessing costs a muslin.
 
-Pure functions, no I/O. Nothing here changes the draft — it only reports
-what the draft had to invent.
+Pure functions. Nothing here changes the draft, only reports what it had
+to invent.
 """
 from __future__ import annotations
 
@@ -37,9 +31,8 @@ class MeasurementNeed:
 
     @property
     def priority(self) -> int:
-        """A fallback that doesn't scale with the body is the worst kind:
-        it's equally wrong for every body except the one it was picked for.
-        Those come first."""
+        """A fallback that doesn't scale with the body is equally wrong for
+        every body but one, so those come first."""
         return 0 if not self.scales_with_body else 1
 
 
@@ -163,11 +156,9 @@ def required_measurements(garment_type: GarmentType) -> tuple[str, ...]:
 def missing_requirements(
     measurements: Measurements, garment_type: GarmentType,
 ) -> list[str]:
-    """Measurements this garment type can't be drafted without.
-
-    Separate from `measurement_needs`: a missing requirement is a blocker,
-    a missing need is a quality cost. Conflating them would either block
-    drafting over a nice-to-have or let a skirt be drafted with no hip.
+    """A missing requirement is a blocker; a missing need is a quality
+    cost. Conflating them would block drafting over a nice-to-have, or let
+    a skirt through with no hip.
     """
     return [
         field for field in required_measurements(garment_type)
@@ -178,11 +169,8 @@ def missing_requirements(
 def measurement_needs(
     measurements: Measurements, garment_type: GarmentType = GarmentType.BODICE,
 ) -> list[MeasurementNeed]:
-    """Which measurements this draft had to estimate, worst guess first.
-
-    Only reports fields the draft genuinely uses — asking for a wrist
-    measurement to draft a bodice would train the sewist to ignore the
-    whole list.
+    """Worst guess first. Only fields the draft genuinely uses — asking for
+    a wrist measurement to draft a bodice trains you to ignore the list.
     """
     candidates = _NEEDS_BY_GARMENT.get(garment_type, ())
     missing = [

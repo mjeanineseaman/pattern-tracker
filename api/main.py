@@ -6,10 +6,8 @@ endpoint over the RAG layer.
 """
 from __future__ import annotations
 
-import base64
 import dataclasses
 import json
-import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -21,7 +19,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from api.body_profile import (
@@ -61,8 +59,6 @@ app.add_middleware(
 )
 
 CROQUIS_DIR = Path(__file__).resolve().parent.parent / "croquis"
-_VISION_MODEL = "claude-sonnet-5"  # swap freely; nothing else depends on the exact id
-_design_intent_adapter = TypeAdapter(DesignIntent)
 _measurements_adapter = TypeAdapter(Measurements)
 _revision_adapter = TypeAdapter(Revision)
 _field_delta_list_adapter = TypeAdapter(list[FieldDelta])
@@ -713,20 +709,6 @@ def get_sloper(garment_type: GarmentType, db: sqlite3.Connection = Depends(get_d
         "garment_type": garment_type.value, "pattern_id": pattern_id, "version": version,
         "marked_at": marked_at, "pattern": pattern.to_dict(),
     }
-
-
-_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?|\n?```\s*$")
-
-
-def _strip_fences(text: str) -> str:
-    """Defensive cleanup for a model that wraps its JSON in markdown fences
-    despite being told not to (PLAN.md Phase 4 is explicit this will
-    happen sometimes) — strips one leading ``` / ```json and one trailing
-    ```, leaves anything else untouched."""
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    return _FENCE_RE.sub("", stripped).strip()
 
 
 @app.post("/croquis")

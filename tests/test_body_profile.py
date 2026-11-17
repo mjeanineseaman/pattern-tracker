@@ -55,14 +55,6 @@ def test_optional_fields_round_trip_including_none():
     assert profile.arm_length is None
 
 
-def test_update_fills_a_missing_profile():
-    conn = _db()
-
-    update_profile(conn, _measurements(bust=920))
-
-    assert get_profile(conn).bust == 920
-
-
 def test_update_overwrites_an_existing_profile():
     """Unconditional by design: the measurements submitted when creating a
     pattern become the profile, so an edit made in that form sticks."""

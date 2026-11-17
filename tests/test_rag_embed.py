@@ -4,8 +4,7 @@ CLAUDE.md's "Why local embeddings, not a semantic embeddings API").
 import sqlite3
 
 from api.rag.embed import (
-    DIMENSIONS, MODEL_NAME, backfill_missing_embeddings, embed_and_store_revision,
-    embed_revision, embed_text, tokenize,
+    DIMENSIONS, MODEL_NAME, embed_and_store_revision, embed_revision, embed_text, tokenize,
 )
 from api.schema import DDL, ChangeType, FieldDelta, Revision, RevisionSource
 
@@ -111,17 +110,3 @@ def test_embed_and_store_revision_round_trips_through_sqlite():
     stored = array("f")
     stored.frombytes(vector_blob)
     assert list(stored) == list(embed_revision(revision))
-
-
-def test_backfill_embeds_only_missing_revisions_and_is_idempotent():
-    revision = _revision()
-    conn = _db_with_revision(revision)  # revisions row exists, no embedding yet
-
-    first_count = backfill_missing_embeddings(conn)
-    assert first_count == 1
-    assert conn.execute(
-        "SELECT COUNT(*) FROM revision_embeddings WHERE revision_id = ?", (revision.id,),
-    ).fetchone() == (1,)
-
-    second_count = backfill_missing_embeddings(conn)
-    assert second_count == 0  # nothing left to embed
