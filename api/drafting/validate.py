@@ -10,7 +10,8 @@ obviously broken, not that the pattern fits. Pure functions, no I/O.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 
 from api.export.geometry import flatten_segment, piece_outline, polygon_centroid
 from api.schema import DesignIntent, Measurements, PatternPiece, Point
@@ -46,9 +47,16 @@ _EASE_TOLERANCE_MM = 2.0
 @dataclass
 class ValidationResult:
     """`failures` are human-readable because they end up in a revision's
-    reason, where the point is telling later what was refused and why."""
+    reason, where the point is telling later what was refused and why.
+
+    `notes` records a check that did not run, and why. A check that quietly
+    skips itself is worse than one that fails: the ease identity is the
+    strongest thing here, and a design that moves the edge it measures
+    would otherwise disable it invisibly.
+    """
     ok: bool
     failures: list[str]
+    notes: list[str] = field(default_factory=list)
 
     def __bool__(self) -> bool:
         return self.ok
@@ -297,6 +305,33 @@ def check_mated_seams(pieces: list[PatternPiece]) -> list[str]:
     return failures
 
 
+def hem_lift_mm(
+    pieces: list[PatternPiece], measurements: Measurements,
+) -> Optional[float]:
+    """How far the bottom edge sits above the waistline, or None if it's on it.
+
+    The waist ease identity assumes the bottom edge still *is* the
+    waistline. A cropped hem (`design.apply_hem_change`) sits above it,
+    over the ribs, where a fitted block is wider — so the identity would
+    measure rib girth, compare it against the waist measurement, and reject
+    a correct cropped top for being cropped.
+
+    The geometry answers this without being told: `cb_waist` is drafted
+    exactly `back_length` below the nape at y=0, so a lifted hem shows up
+    as a mismatch there. No body measurement is taken at rib level, so
+    there is nothing to check against instead and the identity is skipped
+    — reported in `ValidationResult.notes`, never silently.
+    """
+    back = next((p for p in pieces if p.id == "bodice_back"), None)
+    if back is None or measurements.back_length is None:
+        return None
+    cb_waist = back.point_map().get("cb_waist")
+    if cb_waist is None:
+        return None
+    lift = measurements.back_length - cb_waist.y
+    return lift if lift > _EASE_TOLERANCE_MM else None
+
+
 def check_ease(
     pieces: list[PatternPiece], measurements: Measurements, intent: DesignIntent,
 ) -> list[str]:
@@ -335,7 +370,9 @@ def check_ease(
             )
 
     waist_front, waist_back = sewn_edge_length(front, "waist"), sewn_edge_length(back, "waist")
-    if waist_front is not None and waist_back is not None:
+    # A cropped hem sits above the waistline, not on it; see `hem_lift_mm`.
+    skip_waist = hem_lift_mm(pieces, measurements) is not None
+    if not skip_waist and waist_front is not None and waist_back is not None:
         waist_finished = 2 * (waist_front + waist_back)
         waist_expected = measurements.waist + intent.ease_waist_mm + intent.ease_bust_mm
         if abs(waist_finished - waist_expected) > _EASE_TOLERANCE_MM:
@@ -378,9 +415,16 @@ def validate_pieces(
         + check_darts(pieces)
         + check_mated_seams(pieces)
     )
+    notes: list[str] = []
     if measurements is not None and intent is not None:
         failures += check_ease(pieces, measurements, intent)
-    return ValidationResult(ok=not failures, failures=failures)
+        lift = hem_lift_mm(pieces, measurements)
+        if lift is not None:
+            notes.append(
+                f"waist ease not checked: the hem is {lift:.0f}mm above the "
+                f"waist, and no body measurement is taken at that level"
+            )
+    return ValidationResult(ok=not failures, failures=failures, notes=notes)
 
 
 def check_adjustment_magnitude(

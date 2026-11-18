@@ -104,7 +104,7 @@ def _pivot(px: float, py: float, radius: float, guide_y: float, direction: float
     return (px + direction * dx, guide_y)
 
 
-def _dart_point_out(
+def dart_point_out(
     leg_a: tuple[float, float], leg_b: tuple[float, float], apex: tuple[float, float],
 ) -> tuple[float, float]:
     """A dart's "point" (D1): the midpoint of its two legs, pushed outward
@@ -465,7 +465,7 @@ def _draft_back(s: _Shared) -> PatternPiece:
     dart_leg_r = Point("back_shoulder_dart_leg_r", *_to_mm(s.back_dart_leg_r))
     dart_d1 = Point(
         "back_shoulder_dart_d1",
-        *_dart_point_out((dart_leg_p.x, dart_leg_p.y), (dart_leg_r.x, dart_leg_r.y), (dart_apex.x, dart_apex.y)),
+        *dart_point_out((dart_leg_p.x, dart_leg_p.y), (dart_leg_r.x, dart_leg_r.y), (dart_apex.x, dart_apex.y)),
     )
     underarm = Point("underarm_back", *_to_mm(s.underarm))
     underarm_waist = Point("underarm_waist_back", *_to_mm(s.underarm_waist))
@@ -481,7 +481,7 @@ def _draft_back(s: _Shared) -> PatternPiece:
     leg_b = Point("back_waist_dart_leg_b", *_to_mm((leg_b_x, _bf_y(leg_b_x, s.B, s.F))))
     waist_d1 = Point(
         "back_waist_dart_d1",
-        *_dart_point_out((leg_a.x, leg_a.y), (leg_b.x, leg_b.y), (waist_apex.x, waist_apex.y)),
+        *dart_point_out((leg_a.x, leg_a.y), (leg_b.x, leg_b.y), (waist_apex.x, waist_apex.y)),
     )
 
     # Side seam: the side seam's share of the total waist suppression is
@@ -595,7 +595,7 @@ def _draft_front(s: _Shared) -> PatternPiece:
     )
     waist_d1 = Point(
         "front_waist_dart_d1",
-        *_dart_point_out((leg_a.x, leg_a.y), (leg_b.x, leg_b.y), (waist_apex.x, waist_apex.y)),
+        *dart_point_out((leg_a.x, leg_a.y), (leg_b.x, leg_b.y), (waist_apex.x, waist_apex.y)),
     )
 
     # Side seam: cut off directly, not folded as a dart — see the matching

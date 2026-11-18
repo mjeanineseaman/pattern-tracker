@@ -766,6 +766,22 @@ block default", which is a better answer than a guess.
 | `hem_change_mm` | −150–0 | waist edge, dart legs, CF/CB and side-seam ends |
 | `waist_suppression` | 0.0–1.0 | scales waist-dart intake (0 = boxy, 1 = block default) |
 
+**Built:** the pure geometry half — `api/drafting/design.py`, one function
+per parameter plus `apply_design()` to run a whole set, with
+`tests/test_design.py` proving the fold tangent at both every value above
+and every combination, and the range boundaries. Two things the geometry
+forced that the table above doesn't show: cropping or de-suppressing past
+a dart's apex drops that dart rather than inverting it (`_drop_dart`), and
+`check_ease` in `validate.py` now skips the waist identity (with a note,
+not silently) once `hem_change_mm` lifts the hem off the waistline, since
+there's no body measurement at rib level to check it against.
+
+**Not yet built:** the model call that turns a croquis into a
+`DesignParameters`, and wiring `apply_design()` into `create_pattern`
+ahead of the Phase 9.4 fit step. Tier 1's own "done when" — two different
+sleeveless croquis, same body, producing visibly different necklines and
+hems — needs both of those before it's demonstrable end to end.
+
 **Neckline width is deliberately one parameter, not two.** An earlier draft
 of this spec had independent front and back width, which directly breaks
 "ensure the front and back shoulder seams match in length when joined" —
