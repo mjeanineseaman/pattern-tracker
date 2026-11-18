@@ -1,5 +1,5 @@
 """The design step — the model call that reads a croquis and proposes
-Tier 1 design parameters (PLAN.md Phase 10).
+Tier 1 and Tier 2 design choices (PLAN.md Phase 10).
 
 This is the fix for the bug the rest of Phase 10 exists to close: the
 croquis was stored, referenced, and never read. `adjust_draft()`
@@ -12,17 +12,32 @@ so it runs on pattern one.
 Same bound discipline as the fit step, for the same reason (CLAUDE.md: an
 armhole thirty times too deep passed every check it was given once a model
 could emit coordinates). The model never sees or emits a coordinate here
-either — it picks named parameters from api.drafting.design.RANGES, and
-api.drafting.design.apply_design() is the only thing that turns a
-parameter into geometry. A parameter can be range-checked before it ever
-touches a point; a regenerated coordinate set can only be re-validated
-wholesale.
+either — it picks named parameters from api.drafting.design.RANGES, and a
+named dart position from api.drafting.dart_rotation.POSITIONS, and those
+modules' own apply_design()/rotate_bust_dart_to() are the only things that
+turn either into geometry. A parameter can be range-checked, and a
+position can be name-checked, before either ever touches a point; a
+regenerated coordinate set can only be re-validated wholesale.
+
+One model call covers both tiers — PLAN.md's own pipeline diagram groups
+them under a single "design step (croquis)" box ("Tier 1/2/3 below"),
+since it's one coherent reading of the sketch, not two. They fall back
+together too: if either the numeric parameters or the dart position turns
+out to be unusable, the whole proposal is rejected, same "one argument
+about the geometry" rule api.drafting.ai_adjust already applies to a batch
+of fit adjustments.
+
+`"shoulder"` is a real member of Tier 2's named set but isn't offered to
+the model (see api.drafting.dart_rotation's module docstring for why) —
+the prompt only lists the three positions that are actually implemented.
+If a model sends it anyway, `rotate_bust_dart_to()`'s own specific error
+is what ends up in the fallback note.
 
 Every failure path returns the undesigned draft unchanged, same as
 adjust_draft(): no croquis, no key, no network, unusable JSON, an
-out-of-range or geometrically-impossible parameter, a result that fails
-the validator. Design must not become unavailable because an API call, or
-a sketch, did.
+out-of-range or geometrically-impossible parameter, an unreachable dart
+position, a result that fails the validator. Design must not become
+unavailable because an API call, or a sketch, did.
 """
 from __future__ import annotations
 
@@ -34,9 +49,17 @@ from pathlib import Path
 from typing import Any, Optional
 
 from api.drafting.ai_adjust import image_block
+from api.drafting.dart_rotation import POSITIONS as DART_POSITIONS
+from api.drafting.dart_rotation import rotate_bust_dart_to
 from api.drafting.design import RANGES, DesignParameters, apply_design
 from api.drafting.validate import validate_pieces
 from api.schema import DesignIntent, Measurements, PatternPiece
+
+# The full named set from PLAN.md's Tier 2, including "shoulder" -- not
+# offered to the model (see module docstring) but still accepted here if
+# one arrives anyway, so it reaches rotate_bust_dart_to()'s own specific
+# rejection rather than a generic "unusable JSON" one.
+_ALL_DART_POSITIONS = DART_POSITIONS + ("shoulder",)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +87,7 @@ exactly these keys. Use null for any you can't read from the sketch —
 null means "leave the block's own default," which is a better answer \
 than a guess:
 {_PARAMETER_LINES}
+  bust_dart_position ("french", "side", "waist", or null)
 
 Notes on specific parameters:
 - neckline_drop_front_mm / neckline_drop_back_mm: how much lower than the \
@@ -84,9 +108,17 @@ number.
 - waist_suppression: 1.0 is the block's own fitted waist dart, 0.0 is a \
 boxy top with no waist shaping. Read it as roughly how fitted the \
 sketch's waist looks, not as a measurement.
+- bust_dart_position: where the garment's main bust shaping falls, read \
+from the seam or dart line the sketch shows crossing near the bust. \
+"french" is a long diagonal dart entering low on the side seam; "side" \
+is a shorter dart entering the side seam at bust height; "waist" is this \
+tool's own default, a dart at the waist. This tool can't place the dart \
+at the shoulder yet — if the sketch clearly shows a shoulder dart, pick \
+whichever of "french" or "side" looks closest to it, or null if neither \
+does.
 
-Never invent a number you can't actually see in the sketch — null is \
-always better than a guess.
+Never invent a number — or a dart position — you can't actually see in \
+the sketch. null is always better than a guess.
 """
 
 
@@ -96,16 +128,17 @@ class DesignOutcome:
     api.drafting.ai_adjust.AdjustmentOutcome, so the design step's
     contribution to a pattern is visible in the timeline.
 
-    `params` is carried on every fallback path too, including a rejected
-    one, purely as a diagnostic — it's what was parsed, not what was
-    applied. `used_ai` has to be its own field rather than derived from
-    `params.is_empty` for exactly that reason: a 999mm proposal is
-    non-empty and still rejected.
+    `params` and `bust_dart_position` are carried on every fallback path
+    too, including a rejected one, purely as a diagnostic — they're what
+    was parsed, not what was applied. `used_ai` has to be its own field
+    rather than derived from `params.is_empty` for exactly that reason: a
+    999mm proposal is non-empty and still rejected.
     """
     pieces: list[PatternPiece]
     intent: DesignIntent
     params: Optional[DesignParameters]
-    note: str
+    bust_dart_position: Optional[str] = None
+    note: str = ""
     used_ai: bool = False
 
 
@@ -127,13 +160,18 @@ def build_prompt(intent: DesignIntent) -> str:
     )
 
 
-def parse_design_parameters(raw_text: str) -> DesignParameters:
-    """Raises ValueError on anything malformed; the caller turns that into
-    a fallback rather than retrying blindly."""
+def _parse_json_object(raw_text: str) -> dict[str, Any]:
+    """Shared by parse_design_parameters and parse_bust_dart_position so
+    the model's one reply is decoded once per call site, each pulling its
+    own keys out of the same dict -- design_from_croquis() itself parses
+    it exactly once, via this function directly."""
     parsed = json.loads(_strip_fences(raw_text))
     if not isinstance(parsed, dict):
         raise ValueError(f"expected a JSON object, got {type(parsed).__name__}")
+    return parsed
 
+
+def _design_parameters_from_dict(parsed: dict[str, Any]) -> DesignParameters:
     values: dict[str, Optional[float]] = {}
     for field in RANGES:
         raw = parsed.get(field)
@@ -148,6 +186,30 @@ def parse_design_parameters(raw_text: str) -> DesignParameters:
     return DesignParameters(**values)
 
 
+def _bust_dart_position_from_dict(parsed: dict[str, Any]) -> Optional[str]:
+    raw = parsed.get("bust_dart_position")
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or raw not in _ALL_DART_POSITIONS:
+        raise ValueError(
+            f"bust_dart_position must be one of {_ALL_DART_POSITIONS} or "
+            f"null, got {raw!r}"
+        )
+    return raw
+
+
+def parse_design_parameters(raw_text: str) -> DesignParameters:
+    """Raises ValueError on anything malformed; the caller turns that into
+    a fallback rather than retrying blindly."""
+    return _design_parameters_from_dict(_parse_json_object(raw_text))
+
+
+def parse_bust_dart_position(raw_text: str) -> Optional[str]:
+    """Raises ValueError on anything malformed, or on a name outside
+    PLAN.md's own fixed set -- the caller turns either into a fallback."""
+    return _bust_dart_position_from_dict(_parse_json_object(raw_text))
+
+
 def design_from_croquis(
     client,
     pieces: list[PatternPiece],
@@ -155,7 +217,8 @@ def design_from_croquis(
     intent: DesignIntent,
     croquis_path: Optional[Path] = None,
 ) -> DesignOutcome:
-    """Read a croquis and apply the Tier 1 parameters it calls for.
+    """Read a croquis and apply the Tier 1 parameters and Tier 2 dart
+    position it calls for.
 
     Always returns usable pieces and an intent to match them: every
     failure path returns the pieces and intent it was given, unchanged,
@@ -163,9 +226,21 @@ def design_from_croquis(
     (api.drafting.ai_adjust) — design reshapes the garment; the fit step
     then corrects that result for this specific body, so it has to see
     whatever this step actually did, not the formula block.
+
+    One reply, one proposal: Tier 1's parameters and Tier 2's dart
+    position are read from the same JSON object and applied together, and
+    if either turns out to be unusable the whole proposal falls back —
+    same "one argument about the geometry" rule applied everywhere else
+    in this file.
     """
-    def fallback(note: str, params: Optional[DesignParameters] = None) -> DesignOutcome:
-        return DesignOutcome(pieces=list(pieces), intent=intent, params=params, note=note)
+    def fallback(
+        note: str, params: Optional[DesignParameters] = None,
+        bust_dart_position: Optional[str] = None,
+    ) -> DesignOutcome:
+        return DesignOutcome(
+            pieces=list(pieces), intent=intent, params=params,
+            bust_dart_position=bust_dart_position, note=note,
+        )
 
     image = image_block(croquis_path)
     if image is None:
@@ -187,34 +262,51 @@ def design_from_croquis(
         return fallback(f"Drafted from the formulas — the design step failed ({e}).")
 
     try:
-        params = parse_design_parameters(raw_text)
+        parsed = _parse_json_object(raw_text)
+        params = _design_parameters_from_dict(parsed)
+        bust_dart_position = _bust_dart_position_from_dict(parsed)
     except (json.JSONDecodeError, ValueError) as e:
         return fallback(f"Drafted from the formulas — the design proposal was unusable ({e}).")
 
-    if params.is_empty:
+    if params.is_empty and bust_dart_position in (None, "waist"):
         return fallback(
-            "The croquis didn't call for any change from the formula block.", params,
+            "The croquis didn't call for any change from the formula block.",
+            params, bust_dart_position,
         )
 
     try:
         designed_pieces, designed_intent = apply_design(pieces, params, intent)
+        if bust_dart_position not in (None, "waist"):
+            designed_pieces = rotate_bust_dart_to(designed_pieces, bust_dart_position)
     except ValueError as e:
-        # Covers both an out-of-range parameter and a value that's in
-        # range but geometrically impossible on this body (e.g. a
-        # neckline widened past the shoulder) — design.py raises the same
-        # way for both, and either is one bad argument about the garment,
-        # not a partial one to salvage.
-        return fallback(f"Drafted from the formulas — the design proposal was rejected ({e}).", params)
+        # Covers an out-of-range Tier 1 parameter, one that's in range but
+        # geometrically impossible on this body, an unreachable dart
+        # position ("shoulder", see api.drafting.dart_rotation), and a
+        # dart position that's impossible on this body -- every one of
+        # them is design.py or dart_rotation.py raising for the same
+        # reason: one bad argument about the garment, not a partial one
+        # to salvage.
+        return fallback(
+            f"Drafted from the formulas — the design proposal was rejected ({e}).",
+            params, bust_dart_position,
+        )
 
     validation = validate_pieces(designed_pieces, measurements, designed_intent)
     if not validation.ok:
         return fallback(
             "Drafted from the formulas — the designed geometry failed validation: "
             f"{'; '.join(validation.failures)}",
-            params,
+            params, bust_dart_position,
         )
+
+    summary_parts = []
+    if not params.is_empty:
+        summary_parts.append(params.summary())
+    if bust_dart_position not in (None, "waist"):
+        summary_parts.append(f"bust dart moved to {bust_dart_position}")
 
     return DesignOutcome(
         pieces=designed_pieces, intent=designed_intent, params=params,
-        note=f"Designed from the croquis: {params.summary()}.", used_ai=True,
+        bust_dart_position=bust_dart_position,
+        note=f"Designed from the croquis: {'; '.join(summary_parts)}.", used_ai=True,
     )

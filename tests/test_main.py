@@ -903,6 +903,41 @@ def test_create_pattern_designs_from_an_uploaded_croquis(tmp_path, monkeypatch):
     assert created_cf_neck["y"] == plain_cf_neck.y + 80
 
 
+def test_create_pattern_rotates_the_bust_dart_from_an_uploaded_croquis(tmp_path, monkeypatch):
+    """Phase 10 Tier 2, wired in the same place as Tier 1: a sketch whose
+    dart falls on the side seam rather than the waist changes which dart
+    the stored pattern actually has.
+
+    Needs its own, fully-measured body rather than _NEW_PATTERN_BODY:
+    with armscye_depth estimated (as _NEW_PATTERN_BODY's is), bust_point
+    lands above underarm_front on this particular body, which
+    rotate_bust_dart_to() correctly refuses rather than building a
+    mismatched side seam (tests/test_dart_rotation.py covers that case
+    directly) -- an unrelated, real finding this test isn't about, but a
+    body that can't demonstrate the feature isn't the body to use here.
+    """
+    reply = '{"bust_dart_position": "side"}'
+    client, conn, _pattern, fake_client = _client_with_db_and_vision(reply)
+    croquis_ref = _uploaded_croquis_ref(client, tmp_path, monkeypatch)
+    measurements = {
+        "bust": 863.6, "waist": 800.1, "back_length": 355.6, "bust_height": 279.4,
+        "bust_span": 190.5, "armscye_depth": 190.5, "nape_to_bust": 279.4,
+        "neck_circumference": 381.0, "shoulder_length": 127.0, "back_width": 330.2,
+    }
+    body = {**_NEW_PATTERN_BODY, "measurements": measurements, "croquis_ref": croquis_ref}
+
+    created = client.post("/patterns", json=body).json()
+
+    assert fake_client.last_create_kwargs is not None
+    reason = conn.execute(
+        "SELECT reason FROM revisions WHERE pattern_id = ?", (created["id"],),
+    ).fetchone()[0]
+    assert "bust dart moved to side" in reason
+
+    created_front = next(p for p in created["pieces"] if p["id"] == "bodice_front")
+    assert {d["id"] for d in created_front["darts"]} == {"front_shoulder_dart", "side_dart"}
+
+
 def test_create_pattern_with_no_croquis_skips_the_design_step():
     """No sketch on file -- same as a fresh pattern with no fitting
     history for the fit step -- is nothing to design from, not a failure."""

@@ -197,10 +197,12 @@ def create_pattern(
        standard formulas.
     2. Design step (Phase 10) — a separate model call reads the croquis,
        if one was uploaded, and proposes named Tier 1 parameters (a
-       neckline drop, a cropped hem, and so on). This is what makes two
-       different sketches of the same body produce different patterns;
-       without it the sketch was stored and never read. Not gated on
-       fitting history, so it runs on a pattern's very first version.
+       neckline drop, a cropped hem, and so on) and a Tier 2 dart
+       position (where the bust dart falls), together, from one reply.
+       This is what makes two different sketches of the same body produce
+       different patterns; without it the sketch was stored and never
+       read. Not gated on fitting history, so it runs on a pattern's very
+       first version.
     3. Fit adjustment (Phase 9.4) — a second, separate model call applies
        what previous muslin fittings taught us about this body, as
        bounded point deltas, to whatever step 2 produced. Design is about

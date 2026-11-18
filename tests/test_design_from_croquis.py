@@ -1,5 +1,6 @@
 """Tests for the design step (PLAN.md Phase 10): the model call that reads
-a croquis and proposes Tier 1 design parameters.
+a croquis and proposes Tier 1 design parameters and a Tier 2 dart
+position, together, from one reply.
 
 Same emphasis as test_ai_adjust.py and for the same reason: this is the
 other place a model touches geometry, so every way it can go wrong has to
@@ -12,7 +13,8 @@ from types import SimpleNamespace
 from api.drafting.bodice import draft_bodice
 from api.drafting.design import DesignParameters
 from api.drafting.design_from_croquis import (
-    build_prompt, design_from_croquis, parse_design_parameters,
+    build_prompt, design_from_croquis, parse_bust_dart_position,
+    parse_design_parameters,
 )
 from api.schema import DesignIntent, FabricClass, GarmentType, Measurements
 
@@ -212,6 +214,99 @@ def test_a_value_thats_in_range_but_geometrically_impossible_rejects(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Tier 2: the dart position, read from the same reply
+# --------------------------------------------------------------------------
+def test_a_dart_position_alone_is_applied(tmp_path):
+    png = tmp_path / "sketch.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n")
+    client = _FakeClient(_reply(bust_dart_position="side"))
+
+    outcome = _design(client, png)
+
+    assert outcome.used_ai
+    assert "bust dart moved to side" in outcome.note
+    front = next(p for p in outcome.pieces if p.id == "bodice_front")
+    assert {d.id for d in front.darts} == {"front_shoulder_dart", "side_dart"}
+
+
+def test_tier_1_and_tier_2_compose_in_one_proposal(tmp_path):
+    png = tmp_path / "sketch.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n")
+    client = _FakeClient(_reply(neckline_drop_front_mm=60, bust_dart_position="french"))
+
+    outcome = _design(client, png)
+
+    assert outcome.used_ai
+    assert "front neckline 60mm lower" in outcome.note
+    assert "bust dart moved to french" in outcome.note
+    front = next(p for p in outcome.pieces if p.id == "bodice_front")
+    assert "french_dart" in {d.id for d in front.darts}
+    before_front = next(p for p in _pieces() if p.id == "bodice_front")
+    assert front.point_map()["cf_neck"].y == before_front.point_map()["cf_neck"].y + 60
+
+
+def test_a_position_of_waist_is_a_good_answer_not_a_failure(tmp_path):
+    """"waist" names the block's own position explicitly, same meaning as
+    null -- it shouldn't read as "nothing happened" being a problem."""
+    png = tmp_path / "sketch.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n")
+    client = _FakeClient(_reply(bust_dart_position="waist"))
+
+    outcome = _design(client, png)
+
+    assert not outcome.used_ai
+    assert "didn't call for any change" in outcome.note
+
+
+def test_shoulder_is_rejected_with_its_own_specific_reason(tmp_path):
+    """Not offered to the model (see dart_rotation's own module docstring
+    for why), but if one arrives anyway it has to reach
+    rotate_bust_dart_to()'s specific, documented error -- not a generic
+    "unusable JSON" one, and not silently ignored."""
+    png = tmp_path / "sketch.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n")
+    client = _FakeClient(_reply(bust_dart_position="shoulder"))
+    expected = _pieces()
+
+    outcome = _design(client, png)
+
+    assert not outcome.used_ai
+    assert "isn't implemented yet" in outcome.note
+    front = next(p for p in outcome.pieces if p.id == "bodice_front")
+    expected_front = next(p for p in expected if p.id == "bodice_front")
+    assert {d.id for d in front.darts} == {d.id for d in expected_front.darts}
+
+
+def test_an_unknown_dart_position_rejects_the_whole_proposal(tmp_path):
+    png = tmp_path / "sketch.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n")
+    client = _FakeClient(_reply(bust_dart_position="princess"))
+
+    outcome = _design(client, png)
+
+    assert not outcome.used_ai
+    assert "unusable" in outcome.note
+
+
+def test_a_dart_position_that_fails_validation_rejects_the_whole_proposal(tmp_path):
+    """A neckline widened enough to eat the shoulder seam AND a dart move
+    in the same reply: Tier 1's own failure has to fall the whole
+    proposal back, dart position included, not apply one and drop the
+    other."""
+    png = tmp_path / "sketch.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n")
+    client = _FakeClient(_reply(neckline_width_mm=999, bust_dart_position="side"))
+    expected = _pieces()
+
+    outcome = _design(client, png)
+
+    assert not outcome.used_ai
+    front = next(p for p in outcome.pieces if p.id == "bodice_front")
+    expected_front = next(p for p in expected if p.id == "bodice_front")
+    assert {d.id for d in front.darts} == {d.id for d in expected_front.darts}
+
+
+# --------------------------------------------------------------------------
 # Parsing, as a unit
 # --------------------------------------------------------------------------
 def test_fenced_json_is_parsed():
@@ -230,3 +325,30 @@ def test_missing_keys_default_to_none():
 def test_an_explicit_null_is_none():
     params = parse_design_parameters('{"neckline_drop_front_mm": null}')
     assert params.neckline_drop_front_mm is None
+
+
+def test_parse_bust_dart_position_reads_a_valid_name():
+    assert parse_bust_dart_position('{"bust_dart_position": "french"}') == "french"
+
+
+def test_parse_bust_dart_position_accepts_shoulder_even_though_its_not_offered():
+    """Not in the prompt, but still a real name from PLAN.md's fixed set
+    -- parsing accepts it so design_from_croquis() can hand it to
+    rotate_bust_dart_to() for that function's own specific rejection."""
+    assert parse_bust_dart_position('{"bust_dart_position": "shoulder"}') == "shoulder"
+
+
+def test_parse_bust_dart_position_defaults_to_none():
+    assert parse_bust_dart_position('{"neckline_drop_front_mm": 50}') is None
+
+
+def test_parse_bust_dart_position_rejects_an_unknown_name():
+    import pytest
+    with pytest.raises(ValueError, match="bust_dart_position"):
+        parse_bust_dart_position('{"bust_dart_position": "princess"}')
+
+
+def test_parse_bust_dart_position_rejects_a_non_string():
+    import pytest
+    with pytest.raises(ValueError, match="bust_dart_position"):
+        parse_bust_dart_position('{"bust_dart_position": 1}')

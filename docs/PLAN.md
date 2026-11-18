@@ -929,10 +929,31 @@ realistic single body, but enough to prove the formula wasn't bounded).
 Fixed with an explicit precondition: `rotate_bust_dart_to` now raises
 rather than silently building a piece whose seams don't match.
 
-**Not yet built:** the model-call layer (`dart_rotation_from_croquis.py`,
-by analogy with Tier 1's `design_from_croquis.py`) and wiring it into
-`create_pattern` — `bust_dart_position` doesn't reach the pipeline yet,
-same gap Tier 1 had between its first and second commits.
+**Built — the model call and the wiring.** Not a separate module after
+all: PLAN.md's own pipeline diagram groups Tier 1/2/3 under one "design
+step (croquis)" box, so `bust_dart_position` is read from the *same* JSON
+reply as Tier 1's numeric parameters, in `design_from_croquis.py`, and
+applied right after them in `create_pattern` — one proposal, one
+fallback. `"shoulder"` is deliberately not offered to the model (the
+prompt only lists the three implemented names); if one arrives anyway
+— the model ignoring the instruction, or a future prompt change — it
+still reaches `rotate_bust_dart_to()`'s own specific error rather than a
+generic "unusable" one.
+
+**A second real-body interaction, found wiring this in, not invented for
+it.** `tests/test_main.py`'s standard pattern body (`_NEW_PATTERN_BODY`)
+turns out to be exactly the disproportionate case the precondition above
+exists for: it has no `armscye_depth` measured, the *estimated* fallback
+(`needs.py`: a quarter of the bust plus 5cm) is large enough relative to
+its `bust_height` that `bust_point` lands above `underarm_front`, and
+`rotate_bust_dart_to` correctly refuses "side"/"french" on it. `needs.py`
+already frames a missing measurement as "a quality cost," something the
+draft estimates around — this is the first case where going without one
+doesn't just cost quality, it makes a whole capability unavailable until
+`armscye_depth` is actually measured. Worth a line in
+`measurement_needs()`'s own description once this reaches real use, not
+done here (the integration test just uses a fully-measured body instead,
+same as `tests/test_dart_rotation.py` does throughout).
 
 ### Tier 3 — Style lines
 
