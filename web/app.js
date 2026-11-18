@@ -587,20 +587,25 @@ function buildOutlineSvg(layers) {
   if (!hasGeometry) return `<p class="hint">No geometry to show.</p>`;
 
   const { offsets, width, height } = layoutPieces(layers);
-  const shift = (poly, off) => poly.map(([x, y]) => `${(x + off.dx).toFixed(1)},${(y + off.dy).toFixed(1)}`).join(" ");
+  const shiftPt = ([x, y], off) => [(x + off.dx).toFixed(1), (y + off.dy).toFixed(1)];
+  const shiftPoly = (poly, off) => poly.map((p) => shiftPt(p, off).join(",")).join(" ");
+  const shiftLine = (a, b, off, attrs) => {
+    const [x1, y1] = shiftPt(a, off), [x2, y2] = shiftPt(b, off);
+    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" ${attrs}/>`;
+  };
 
   let body = "";
   for (const { outline, color } of layers) {
     for (const piece of outline.pieces) {
       const off = offsets[piece.id];
-      body += `<polygon points="${shift(piece.cut, off)}" fill="none" stroke="${color}" stroke-width="1" stroke-dasharray="4,2" opacity="0.6"/>`;
-      body += `<polygon points="${shift(piece.stitching, off)}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
+      body += `<polygon points="${shiftPoly(piece.cut, off)}" fill="none" stroke="${color}" stroke-width="1" stroke-dasharray="4,2" opacity="0.6"/>`;
+      body += `<polygon points="${shiftPoly(piece.stitching, off)}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
       for (const [a, b] of piece.darts) {
-        body += `<line x1="${(a[0] + off.dx).toFixed(1)}" y1="${(a[1] + off.dy).toFixed(1)}" x2="${(b[0] + off.dx).toFixed(1)}" y2="${(b[1] + off.dy).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="2,1"/>`;
+        body += shiftLine(a, b, off, `stroke="${color}" stroke-width="1" stroke-dasharray="2,1"`);
       }
       if (piece.grainline) {
         const [g0, g1] = piece.grainline;
-        body += `<line x1="${(g0[0] + off.dx).toFixed(1)}" y1="${(g0[1] + off.dy).toFixed(1)}" x2="${(g1[0] + off.dx).toFixed(1)}" y2="${(g1[1] + off.dy).toFixed(1)}" stroke="${color}" stroke-width="1" opacity="0.7"/>`;
+        body += shiftLine(g0, g1, off, `stroke="${color}" stroke-width="1" opacity="0.7"`);
       }
     }
   }

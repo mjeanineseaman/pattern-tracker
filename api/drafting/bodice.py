@@ -104,6 +104,16 @@ def _pivot(px: float, py: float, radius: float, guide_y: float, direction: float
     return (px + direction * dx, guide_y)
 
 
+def unit_vector(dx: float, dy: float) -> tuple[float, float]:
+    """(dx, dy) scaled to length 1. Shared because every drafting module
+    ends up needing "the direction from A to B" and had been normalizing
+    it inline — dart_point_out's own perpendicular below,
+    api.drafting.design's `_unit`, and api.drafting.dart_rotation's apex
+    placement."""
+    length = math.hypot(dx, dy)
+    return dx / length, dy / length
+
+
 def dart_point_out(
     leg_a: tuple[float, float], leg_b: tuple[float, float], apex: tuple[float, float],
 ) -> tuple[float, float]:
@@ -122,9 +132,7 @@ def dart_point_out(
     """
     mid = ((leg_a[0] + leg_b[0]) / 2, (leg_a[1] + leg_b[1]) / 2)
     dist = math.hypot(leg_a[0] - mid[0], leg_a[1] - mid[1]) / 2
-    dx, dy = leg_b[0] - leg_a[0], leg_b[1] - leg_a[1]
-    length = math.hypot(dx, dy)
-    ux, uy = dx / length, dy / length
+    ux, uy = unit_vector(leg_b[0] - leg_a[0], leg_b[1] - leg_a[1])
     perp_a, perp_b = (-uy, ux), (uy, -ux)
     away = (mid[0] - apex[0], mid[1] - apex[1])
     perp = perp_a if (perp_a[0] * away[0] + perp_a[1] * away[1]) > (perp_b[0] * away[0] + perp_b[1] * away[1]) \
@@ -148,7 +156,7 @@ def _parabola_to_cubic(
     and p3=(w, k*w^2) (y = k*x^2, p0 at the vertex) — degree-elevated from
     the equivalent quadratic bezier (control point at (w/2, 0), which
     traces the same parabola exactly: x(t)=w*t, y(t)=k*w^2*t^2)."""
-    w, kw2 = p3[0] - p0[0], p3[1] - p0[1]
+    w = p3[0] - p0[0]
     q = (p0[0] + w / 2, p0[1])
     c1 = (p0[0] + 2 / 3 * (q[0] - p0[0]), p0[1] + 2 / 3 * (q[1] - p0[1]))
     c2 = (p3[0] + 2 / 3 * (q[0] - p3[0]), p3[1] + 2 / 3 * (q[1] - p3[1]))

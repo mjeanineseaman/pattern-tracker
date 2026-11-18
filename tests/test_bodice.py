@@ -339,7 +339,6 @@ def test_back_shoulder_dart_leg_r_is_a_short_step_from_p_toward_o():
     back = _piece(pieces, "bodice_back")
     pm = back.point_map()
 
-    p, r, o = pm["back_shoulder_dart_leg_p"], pm["back_shoulder_dart_leg_r"], pm["back_shoulder_tip"]
     assert _dist(pm, "back_shoulder_dart_leg_p", "back_shoulder_dart_leg_r") == pytest_approx(15.0)
     # R is between P and O (closer to O), i.e. a short step FROM P TOWARD O
     assert _dist(pm, "back_shoulder_dart_leg_r", "back_shoulder_tip") < _dist(pm, "back_shoulder_dart_leg_p", "back_shoulder_tip")
@@ -555,8 +554,6 @@ def test_draft_from_sloper_carries_a_manual_correction_onto_a_different_body():
     sloper_m, intent = _measurements(), _intent()
     sloper_pieces = list(draft_bodice(sloper_m, intent))
     back = next(p for p in sloper_pieces if p.id == "bodice_back")
-    pm = back.point_map()
-    apex = pm["back_shoulder_dart_apex"]
     dx, dy = 4.0, -2.5  # a hand-made correction, in mm
     corrected_points = [
         dataclasses.replace(p, x=p.x + dx, y=p.y + dy) if p.id == "back_shoulder_dart_apex" else p

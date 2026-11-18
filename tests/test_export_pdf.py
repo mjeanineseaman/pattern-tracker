@@ -2,8 +2,6 @@
 page count, a calibration square sized exactly 50mm) — NOT physical print
 accuracy, which per CLAUDE.md only a printed page and a ruler can confirm.
 """
-import math
-
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import mm
 

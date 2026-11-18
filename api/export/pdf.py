@@ -584,7 +584,7 @@ def _draw_cut_on_fold_preview_page(
 
     for i, (piece, outline) in enumerate(zip(foldable, outlines)):
         minx, miny, maxx, maxy = bounding_box(outline)
-        w, h = maxx - minx, maxy - miny
+        w = maxx - minx
         cell_x0 = margin_mm + i * cell_w
         origin_x = cell_x0 + (cell_w - w * scale) / 2
         top_y = page_h_mm - margin_mm - _OVERVIEW_HEADING_MM

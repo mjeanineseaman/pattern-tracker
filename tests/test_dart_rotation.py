@@ -10,13 +10,11 @@ millimetre already present in the base draft's own leg asymmetry), that
 failure path raises clearly rather than producing a silently broken
 piece.
 """
-import math
-
 import pytest
 
 from api.drafting.bodice import draft_bodice
 from api.drafting.dart_rotation import (
-    POSITIONS, french_dart_fraction, rotate_bust_dart_to, side_dart_fraction,
+    french_dart_fraction, rotate_bust_dart_to, side_dart_fraction,
 )
 from api.drafting.design import apply_hem_change, apply_waist_suppression
 from api.drafting.validate import check_mated_seams, sewn_edge_length, validate_pieces

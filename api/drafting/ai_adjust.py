@@ -89,7 +89,11 @@ class AdjustmentOutcome:
         return bool(self.applied)
 
 
-def _strip_fences(text: str) -> str:
+def strip_fences(text: str) -> str:
+    """Strip a markdown code fence off a model reply, if it sent one
+    despite being told not to. Public because
+    api.drafting.design_from_croquis parses the same kind of reply and
+    reuses this rather than keeping its own copy."""
     stripped = text.strip()
     if not stripped.startswith("```"):
         return stripped
@@ -144,7 +148,7 @@ def build_prompt(
 def parse_adjustments(raw_text: str) -> list[Adjustment]:
     """Raises ValueError on anything malformed; the caller turns that into
     a fallback rather than retrying blindly."""
-    parsed = json.loads(_strip_fences(raw_text))
+    parsed = json.loads(strip_fences(raw_text))
     if not isinstance(parsed, list):
         raise ValueError(f"expected a JSON array, got {type(parsed).__name__}")
     if len(parsed) > _MAX_ADJUSTMENTS:

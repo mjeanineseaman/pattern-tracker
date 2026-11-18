@@ -32,7 +32,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
-from api.drafting.bodice import dart_point_out
+from api.drafting.bodice import dart_point_out, unit_vector
 from api.schema import DesignIntent, PatternPiece, SegmentKind
 
 # A dart needs to stay a dart. Cropping that lands the hem at or above a
@@ -210,11 +210,9 @@ def _point(piece: PatternPiece, point_id: str):
 
 
 def _unit(frm, toward) -> tuple[float, float]:
-    dx, dy = toward.x - frm.x, toward.y - frm.y
-    length = math.hypot(dx, dy)
-    if length == 0:
+    if frm.x == toward.x and frm.y == toward.y:
         raise ValueError("cannot take a direction between coincident points")
-    return dx / length, dy / length
+    return unit_vector(toward.x - frm.x, toward.y - frm.y)
 
 
 def _waist_darts(piece: PatternPiece):

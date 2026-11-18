@@ -11,7 +11,6 @@ import json
 from types import SimpleNamespace
 
 from api.drafting.bodice import draft_bodice
-from api.drafting.design import DesignParameters
 from api.drafting.design_from_croquis import (
     build_prompt, design_from_croquis, parse_bust_dart_position,
     parse_design_parameters,

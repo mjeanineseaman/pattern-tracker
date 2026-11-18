@@ -9,9 +9,9 @@ import math
 
 from api.drafting.bodice import draft_bodice
 from api.drafting.validate import (
-    _max_perpendicular_deviation, check_adjustment_magnitude, check_armholes,
-    check_darts, check_ease, check_mated_seams, check_necklines_are_monotonic,
-    check_points_are_finite, sewn_edge_length, validate_pieces,
+    check_adjustment_magnitude, check_armholes, check_darts, check_ease,
+    check_mated_seams, check_necklines_are_monotonic, check_points_are_finite,
+    sewn_edge_length, validate_pieces,
 )
 from api.schema import DesignIntent, FabricClass, GarmentType, Measurements, Point
 

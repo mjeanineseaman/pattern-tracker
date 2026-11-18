@@ -17,7 +17,7 @@ import re
 import sqlite3
 from array import array
 
-from api.schema import Revision, revision_from_row
+from api.schema import Revision
 
 DIMENSIONS = 512
 MODEL_NAME = "hashed-bow-v1"

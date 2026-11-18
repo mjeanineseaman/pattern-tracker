@@ -36,9 +36,8 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Optional
 
-from api.drafting.bodice import DART_APEX_STANDOFF_CM, dart_point_out
+from api.drafting.bodice import DART_APEX_STANDOFF_CM, dart_point_out, unit_vector
 from api.drafting.design import drop_dart
 from api.schema import Dart, PatternPiece, Point, Segment, SegmentKind
 
@@ -66,10 +65,6 @@ _NOT_YET_IMPLEMENTED = ("shoulder",)
 # tests/test_dart_rotation.py). A small margin, not a bare 0/1, keeps the
 # new dart's near leg off of underarm_front itself.
 _MIN_SEAM_MARGIN = 0.05
-
-
-def _point(piece: PatternPiece, point_id: str) -> Point:
-    return piece.point_map()[point_id]
 
 
 def _rotate(x: float, y: float, pivot: Point, angle: float) -> tuple[float, float]:
@@ -186,9 +181,7 @@ def rotate_bust_dart_to(pieces: list[PatternPiece], position: str) -> list[Patte
     side_waist.x, side_waist.y = rotated_side_waist
 
     prefix = f"front_{position}_dart"
-    ux, uy = target_x - bust_point.x, target_y - bust_point.y
-    radius = math.hypot(ux, uy)
-    ux, uy = ux / radius, uy / radius
+    ux, uy = unit_vector(target_x - bust_point.x, target_y - bust_point.y)
     apex = Point(f"{prefix}_apex", bust_point.x + ux * _STANDOFF_MM, bust_point.y + uy * _STANDOFF_MM)
     near_leg = Point(f"{prefix}_leg_a", target_x, target_y)       # underarm side: fixed
     far_leg = Point(f"{prefix}_leg_b", *rotated_far)              # side_waist side: rotated

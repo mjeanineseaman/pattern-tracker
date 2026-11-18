@@ -43,12 +43,11 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from api.drafting.ai_adjust import image_block
+from api.drafting.ai_adjust import image_block, strip_fences
 from api.drafting.dart_rotation import POSITIONS as DART_POSITIONS
 from api.drafting.dart_rotation import rotate_bust_dart_to
 from api.drafting.design import RANGES, DesignParameters, apply_design
@@ -64,8 +63,6 @@ _ALL_DART_POSITIONS = DART_POSITIONS + ("shoulder",)
 logger = logging.getLogger(__name__)
 
 MODEL = "claude-sonnet-5"
-
-_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?|\n?```\s*$")
 
 _PARAMETER_LINES = "\n".join(
     f"  {field} ({low:g} to {high:g})" for field, (low, high) in RANGES.items()
@@ -142,13 +139,6 @@ class DesignOutcome:
     used_ai: bool = False
 
 
-def _strip_fences(text: str) -> str:
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    return _FENCE_RE.sub("", stripped).strip()
-
-
 def build_prompt(intent: DesignIntent) -> str:
     return (
         f"Design intent:\n"
@@ -165,7 +155,7 @@ def _parse_json_object(raw_text: str) -> dict[str, Any]:
     the model's one reply is decoded once per call site, each pulling its
     own keys out of the same dict -- design_from_croquis() itself parses
     it exactly once, via this function directly."""
-    parsed = json.loads(_strip_fences(raw_text))
+    parsed = json.loads(strip_fences(raw_text))
     if not isinstance(parsed, dict):
         raise ValueError(f"expected a JSON object, got {type(parsed).__name__}")
     return parsed

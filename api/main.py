@@ -88,6 +88,28 @@ def _croquis_path(croquis_ref: str | None) -> Path | None:
     return candidate
 
 
+def _snapshot_row(db: sqlite3.Connection, pattern_id: str, version: int):
+    """The one query every version-scoped endpoint needs first: the
+    stored JSON for one pattern's one version, or None if there isn't
+    one. Raw, not raising — a missing version is a plain 404 almost
+    everywhere (see `_load_pattern_version` below), but a couple of call
+    sites need a different status or a message naming the version, so
+    the exception stays there."""
+    return db.execute(
+        "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
+        (pattern_id, version),
+    ).fetchone()
+
+
+def _load_pattern_version(db: sqlite3.Connection, pattern_id: str, version: int) -> Pattern:
+    """`_snapshot_row` plus the 404 and the parse, for every endpoint that
+    just wants the pattern and nothing fancier said about a missing one."""
+    row = _snapshot_row(db, pattern_id, version)
+    if row is None:
+        raise HTTPException(status_code=404, detail="pattern version not found")
+    return pattern_from_json(row[0])
+
+
 def get_anthropic_client() -> Anthropic:
     """Reads ANTHROPIC_API_KEY from the environment (api.db's load_dotenv()
     call, already imported above, has put it there by the time any route
@@ -258,10 +280,7 @@ def create_pattern(
 
     if sloper_row is not None:
         sloper_pattern_id, sloper_version = sloper_row
-        sloper_snap = db.execute(
-            "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
-            (sloper_pattern_id, sloper_version),
-        ).fetchone()
+        sloper_snap = _snapshot_row(db, sloper_pattern_id, sloper_version)
         if sloper_snap is None:
             # Same "shouldn't be reachable" case GET /slopers/{type} already
             # guards against (see its docstring) — nothing in this app
@@ -401,13 +420,7 @@ def get_pattern(pattern_id: str, db: sqlite3.Connection = Depends(get_db)) -> di
 
 @app.get("/patterns/{pattern_id}/versions/{version}")
 def get_pattern_version(pattern_id: str, version: int, db: sqlite3.Connection = Depends(get_db)) -> dict:
-    row = db.execute(
-        "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
-        (pattern_id, version),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="pattern version not found")
-    return pattern_from_json(row[0]).to_dict()
+    return _load_pattern_version(db, pattern_id, version).to_dict()
 
 
 @app.get("/patterns/{pattern_id}/versions/{version}/outline")
@@ -420,14 +433,7 @@ def get_pattern_outline(
     seam-allowance logic duplicated in JS. Two versions' outputs share the
     same (x, y) millimetre space, so the frontend can overlay them in
     different colours without any extra alignment step."""
-    row = db.execute(
-        "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
-        (pattern_id, version),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="pattern version not found")
-
-    pattern = pattern_from_json(row[0])
+    pattern = _load_pattern_version(db, pattern_id, version)
     pieces = []
     for piece in pattern.pieces:
         stitching = piece_outline(piece)
@@ -455,14 +461,7 @@ def get_pattern_outline(
 def get_pattern_pdf(
     pattern_id: str, version: int, db: sqlite3.Connection = Depends(get_db),
 ) -> Response:
-    row = db.execute(
-        "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
-        (pattern_id, version),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="pattern version not found")
-
-    pattern = pattern_from_json(row[0])
+    pattern = _load_pattern_version(db, pattern_id, version)
     pdf_bytes = render_pattern_pdf(pattern.pieces)
     return Response(content=pdf_bytes, media_type="application/pdf")
 
@@ -497,10 +496,7 @@ def revise_pattern(
         raise HTTPException(status_code=404, detail="pattern not found")
     current_version, garment_type = row
 
-    snap_row = db.execute(
-        "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
-        (pattern_id, current_version),
-    ).fetchone()
+    snap_row = _snapshot_row(db, pattern_id, current_version)
     if snap_row is None:
         raise HTTPException(
             status_code=500,
@@ -605,17 +601,11 @@ def diff_pattern_versions(
     field nudged twice (15mm -> 20mm -> 25mm across two revisions) should
     show up here as the one change that actually matters end to end
     (15mm -> 25mm), not two redundant entries."""
-    from_row = db.execute(
-        "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
-        (pattern_id, from_version),
-    ).fetchone()
+    from_row = _snapshot_row(db, pattern_id, from_version)
     if from_row is None:
         raise HTTPException(status_code=404, detail=f"{pattern_id}: version {from_version} not found")
 
-    to_row = db.execute(
-        "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
-        (pattern_id, to_version),
-    ).fetchone()
+    to_row = _snapshot_row(db, pattern_id, to_version)
     if to_row is None:
         raise HTTPException(status_code=404, detail=f"{pattern_id}: version {to_version} not found")
 
@@ -677,14 +667,7 @@ def mark_sloper(
     the sloper" and "for which garment type" are the same decision, not
     two independent ones that could disagree.
     """
-    row = db.execute(
-        "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
-        (pattern_id, version),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="pattern version not found")
-
-    pattern = pattern_from_json(row[0])
+    pattern = _load_pattern_version(db, pattern_id, version)
     garment_type = pattern.intent.garment_type.value
     marked_at = datetime.now(timezone.utc).isoformat()
 
@@ -732,10 +715,7 @@ def get_sloper(garment_type: GarmentType, db: sqlite3.Connection = Depends(get_d
         raise HTTPException(status_code=404, detail=f"no reference sloper marked for {garment_type.value}")
     pattern_id, version, marked_at = row
 
-    snap_row = db.execute(
-        "SELECT snapshot_json FROM pattern_versions WHERE pattern_id = ? AND version = ?",
-        (pattern_id, version),
-    ).fetchone()
+    snap_row = _snapshot_row(db, pattern_id, version)
     if snap_row is None:
         raise HTTPException(
             status_code=500,
