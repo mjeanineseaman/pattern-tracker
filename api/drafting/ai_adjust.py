@@ -205,9 +205,15 @@ def apply_adjustments(
     return adjusted, list(by_point.values()), rejected
 
 
-def _image_block(croquis_path: Optional[Path]) -> Optional[dict[str, Any]]:
+def image_block(croquis_path: Optional[Path]) -> Optional[dict[str, Any]]:
     """The sketch, if it's still on disk. A missing file is not an error:
-    the pattern outlives the upload."""
+    the pattern outlives the upload.
+
+    Public because api.drafting.design_from_croquis builds the same block
+    for its own model call — the design step's whole job is reading this
+    sketch, so it reuses the one place that already turns a path into
+    something the API accepts rather than re-deriving media-type handling.
+    """
     if croquis_path is None or not croquis_path.is_file():
         return None
     suffix = croquis_path.suffix.lower()
@@ -252,7 +258,7 @@ def adjust_draft(
         )
 
     content: list[dict[str, Any]] = []
-    image = _image_block(croquis_path)
+    image = image_block(croquis_path)
     if image is not None:
         content.append(image)
     content.append({

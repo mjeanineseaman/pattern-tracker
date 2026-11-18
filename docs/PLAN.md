@@ -766,8 +766,8 @@ block default", which is a better answer than a guess.
 | `hem_change_mm` | −150–0 | waist edge, dart legs, CF/CB and side-seam ends |
 | `waist_suppression` | 0.0–1.0 | scales waist-dart intake (0 = boxy, 1 = block default) |
 
-**Built:** the pure geometry half — `api/drafting/design.py`, one function
-per parameter plus `apply_design()` to run a whole set, with
+**Built — the pure geometry:** `api/drafting/design.py`, one function per
+parameter plus `apply_design()` to run a whole set, with
 `tests/test_design.py` proving the fold tangent at both every value above
 and every combination, and the range boundaries. Two things the geometry
 forced that the table above doesn't show: cropping or de-suppressing past
@@ -776,11 +776,31 @@ a dart's apex drops that dart rather than inverting it (`_drop_dart`), and
 not silently) once `hem_change_mm` lifts the hem off the waistline, since
 there's no body measurement at rib level to check it against.
 
-**Not yet built:** the model call that turns a croquis into a
-`DesignParameters`, and wiring `apply_design()` into `create_pattern`
-ahead of the Phase 9.4 fit step. Tier 1's own "done when" — two different
-sleeveless croquis, same body, producing visibly different necklines and
-hems — needs both of those before it's demonstrable end to end.
+**Built — the model call and the wiring:** `api/drafting/design_from_croquis.py`
+is the design step from "The shape of the fix" above — its own system
+prompt (the model picks the six named parameters above, never a
+coordinate), its own fallback for every failure path (no croquis on file,
+a bad key, unusable JSON, an out-of-range or geometrically-impossible
+value, a result that fails the validator), same discipline as Phase 9.4's
+`adjust_draft()`. Wired into `POST /patterns` in `api/main.py` ahead of
+the fit step, exactly as specced: `draft_bodice() -> design_from_croquis()
+-> adjust_draft() -> store`. The design step's output `DesignIntent` (not
+the request's own) is what the fit step validates against and what gets
+stored in the snapshot — `waist_suppression` can raise `ease_waist_mm`,
+and the stored pattern has to agree with its own geometry or a later
+`check_ease()` fails a pattern that was correct when drafted.
+`tests/test_design_from_croquis.py` covers the step alone; new cases in
+`tests/test_main.py` cover it wired in, including
+`test_a_bad_design_proposal_does_not_discard_a_good_fit_correction` —
+the "failure isolates" property the two-call split exists for, checked
+end to end rather than trusted from each module's own tests.
+
+Tier 1's "done when" — two different sleeveless croquis, same body,
+producing visibly different necklines and hems, both passing the
+validator — is now demonstrable end to end. Not yet exercised against the
+real Anthropic API with a real key (same gap PLAN.md already records for
+Phase 4's `POST /croquis` and Phase 9.4): every test here runs against a
+stub client.
 
 **Neckline width is deliberately one parameter, not two.** An earlier draft
 of this spec had independent front and back width, which directly breaks

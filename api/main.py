@@ -28,6 +28,7 @@ from api.body_profile import (
 from api.db import get_connection
 from api.drafting.ai_adjust import adjust_draft
 from api.drafting.bodice import draft_bodice, draft_bodice_from_sloper
+from api.drafting.design_from_croquis import design_from_croquis
 from api.drafting.needs import (
     garment_blocks, is_draftable, measurement_needs, missing_blocks,
     missing_requirements, needs_to_dict, required_measurements,
@@ -189,19 +190,34 @@ def create_pattern(
     db: sqlite3.Connection = Depends(get_db),
     client: Anthropic = Depends(get_anthropic_client),
 ) -> dict:
-    """PLAN.md Phase 4 + 6 + 9.4. Three steps, in order:
+    """PLAN.md Phase 4 + 6 + 9.4 + 10. Four steps, in order:
 
     1. Deterministic draft — from a marked reference sloper's fitted
        geometry if one exists for this garment type, otherwise from the
        standard formulas.
-    2. AI adjustment (Phase 9.4) — the model applies what previous muslin
-       fittings taught us about this body, as bounded point deltas. Every
-       failure path falls back to step 1's draft, so this never makes
-       drafting unavailable.
-    3. Write version 1 plus a CROQUIS_DRAFT revision whose reason records
-       which path was taken and what, if anything, the model changed —
-       the model's contribution is visible in the timeline rather than
-       baked invisibly into the geometry.
+    2. Design step (Phase 10) — a separate model call reads the croquis,
+       if one was uploaded, and proposes named Tier 1 parameters (a
+       neckline drop, a cropped hem, and so on). This is what makes two
+       different sketches of the same body produce different patterns;
+       without it the sketch was stored and never read. Not gated on
+       fitting history, so it runs on a pattern's very first version.
+    3. Fit adjustment (Phase 9.4) — a second, separate model call applies
+       what previous muslin fittings taught us about this body, as
+       bounded point deltas, to whatever step 2 produced. Design is about
+       the garment; fit correction is about the body, which is why they
+       stay two calls rather than one and why fit goes last — a learning
+       like "the back pulls across the shoulder blade" applies to the
+       final silhouette, not to a block the design step is about to
+       reshape.
+    4. Write version 1 plus a CROQUIS_DRAFT revision whose reason records
+       which path was taken and what, if anything, each model changed —
+       their contribution is visible in the timeline rather than baked
+       invisibly into the geometry.
+
+    Steps 2 and 3 each validate their own output and fall back to their
+    own input on any failure, so a bad design proposal can't discard a
+    good fit correction or vice versa, and neither step can make drafting
+    unavailable.
     """
     # Only the bodice block is implemented. Drafting a bodice and labelling
     # it "skirt" would produce a pattern that is confidently the wrong
@@ -264,14 +280,31 @@ def create_pattern(
         pieces = draft_bodice(body.measurements, body.intent)
         draft_note = "Drafted from the standard formulas (no reference sloper marked for this garment type yet)."
 
+    # Phase 10. Gated on the croquis existing, not on fitting history — this
+    # is the step that lets a brand-new pattern's sketch actually change the
+    # garment. `intent` may come back different from `body.intent`: a
+    # released waist dart (waist_suppression) adds ease, and that has to
+    # travel with the geometry into both the fit step below and the stored
+    # snapshot, or a later re-validation would check the geometry against
+    # the wrong ease and fail on a pattern that was correct when drafted.
+    design_outcome = design_from_croquis(
+        client, pieces, body.measurements, body.intent,
+        croquis_path=_croquis_path(body.croquis_ref),
+    )
+    pieces, intent = design_outcome.pieces, design_outcome.intent
+    draft_note = f"{draft_note} {design_outcome.note}"
+
     # Phase 9.4. Learnings come from muslin fittings only (api.learnings),
     # so with no fitting history this short-circuits without an API call.
-    garment_type = body.intent.garment_type.value
+    # Runs against the design step's own output, not the bare formula
+    # draft — a learning about this body applies to whatever the sketch
+    # just became, not to the un-styled block the sketch may have changed.
+    garment_type = intent.garment_type.value
     outcome = adjust_draft(
         client,
         pieces,
         body.measurements,
-        body.intent,
+        intent,
         [l.learning for l in learnings_for(db, garment_type)],
         croquis_path=_croquis_path(body.croquis_ref),
     )
@@ -292,7 +325,11 @@ def create_pattern(
     pattern_id = uuid.uuid4().hex
     pattern = Pattern(
         id=pattern_id, name=body.name, version=1,
-        measurements=body.measurements, intent=body.intent, pieces=pieces,
+        # `intent`, not `body.intent`: the design step may have raised
+        # ease_waist_mm to account for a dart it released, and the stored
+        # snapshot has to agree with the geometry it's paired with, or a
+        # later check_ease() runs against the wrong number.
+        measurements=body.measurements, intent=intent, pieces=pieces,
         croquis_ref=body.croquis_ref,
     )
 

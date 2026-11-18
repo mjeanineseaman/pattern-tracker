@@ -863,6 +863,133 @@ def test_creation_still_succeeds_when_the_model_call_fails():
 
 
 # --------------------------------------------------------------------------
+# The Phase 10 design step, wired into POST /patterns ahead of Phase 9.4's
+# fit step. _PNG_BYTES and the CROQUIS_DIR monkeypatch are shared with the
+# POST /croquis tests below; defined there, used here too.
+# --------------------------------------------------------------------------
+def _uploaded_croquis_ref(client, tmp_path, monkeypatch) -> str:
+    import api.main as main_module
+    monkeypatch.setattr(main_module, "CROQUIS_DIR", tmp_path / "croquis")
+    response = client.post(
+        "/croquis", files={"file": ("sketch.png", _PNG_BYTES, "image/png")},
+    )
+    return response.json()["croquis_ref"]
+
+
+def test_create_pattern_designs_from_an_uploaded_croquis(tmp_path, monkeypatch):
+    """The whole point of Phase 10: a sketch on a brand-new pattern — no
+    fitting history at all — still changes the geometry, because the
+    design step isn't gated on learnings the way the fit step is."""
+    reply = '{"neckline_drop_front_mm": 80, "hem_change_mm": -40}'
+    client, conn, _pattern, fake_client = _client_with_db_and_vision(reply)
+    croquis_ref = _uploaded_croquis_ref(client, tmp_path, monkeypatch)
+    body = {**_NEW_PATTERN_BODY, "croquis_ref": croquis_ref}
+
+    created = client.post("/patterns", json=body).json()
+
+    assert fake_client.last_create_kwargs is not None
+    reason = conn.execute(
+        "SELECT reason FROM revisions WHERE pattern_id = ?", (created["id"],),
+    ).fetchone()[0]
+    assert "Designed from the croquis" in reason
+    assert "front neckline 80mm lower" in reason
+
+    plain = draft_bodice(Measurements(**_NEW_PATTERN_BODY["measurements"]),
+                          DesignIntent(GarmentType.BODICE, FabricClass.WOVEN))
+    plain_front = next(p for p in plain if p.id == "bodice_front")
+    created_front = next(p for p in created["pieces"] if p["id"] == "bodice_front")
+    plain_cf_neck = next(p for p in plain_front.points if p.id == "cf_neck")
+    created_cf_neck = next(p for p in created_front["points"] if p["id"] == "cf_neck")
+    assert created_cf_neck["y"] == plain_cf_neck.y + 80
+
+
+def test_create_pattern_with_no_croquis_skips_the_design_step():
+    """No sketch on file -- same as a fresh pattern with no fitting
+    history for the fit step -- is nothing to design from, not a failure."""
+    client, conn, _pattern, fake_client = _client_with_db_and_vision("irrelevant")
+
+    created = client.post("/patterns", json=_NEW_PATTERN_BODY).json()
+
+    assert fake_client.last_create_kwargs is None  # the fit step short-circuits too
+    reason = conn.execute(
+        "SELECT reason FROM revisions WHERE pattern_id = ?", (created["id"],),
+    ).fetchone()[0]
+    assert "nothing to design from" in reason
+
+
+def test_create_pattern_stores_the_eased_intent_a_released_dart_adds(tmp_path, monkeypatch):
+    """waist_suppression releases a dart's intake, which adds girth the
+    validator has to be told about -- the stored snapshot's intent has to
+    carry that ease forward, or re-validating this exact pattern later
+    would check its geometry against the wrong number and fail it."""
+    reply = '{"waist_suppression": 0.0}'
+    client, _conn, _pattern, _fake = _client_with_db_and_vision(reply)
+    croquis_ref = _uploaded_croquis_ref(client, tmp_path, monkeypatch)
+    body = {**_NEW_PATTERN_BODY, "croquis_ref": croquis_ref}
+
+    created = client.post("/patterns", json=body).json()
+
+    assert created["intent"]["ease_waist_mm"] > DesignIntent(
+        GarmentType.BODICE, FabricClass.WOVEN,
+    ).ease_waist_mm
+    # and what's fetched back matches what was stored, same ease included
+    fetched = client.get(f"/patterns/{created['id']}").json()
+    assert fetched["intent"]["ease_waist_mm"] == created["intent"]["ease_waist_mm"]
+
+
+def test_a_bad_design_proposal_does_not_discard_a_good_fit_correction(tmp_path, monkeypatch):
+    """PLAN.md's whole reason for two calls instead of one: 'Failure
+    isolates. A design proposal that fails validation shouldn't throw away
+    a good fit correction, or vice versa.' The design call's garbled reply
+    falls back on its own; the fit call right after it, on the same
+    pattern, still gets to apply a real learning."""
+    import api.main as main_module
+
+    class _SequentialClient:
+        """Returns a different canned reply each call -- the design step's
+        call first, then the fit step's -- rather than one reply forced to
+        answer both, which is all the shared _FakeAnthropicClient can do."""
+        def __init__(self, replies):
+            self._replies = iter(replies)
+            self.calls: list[dict] = []
+
+            class _Messages:
+                def create(inner_self, **kwargs):
+                    self.calls.append(kwargs)
+                    return SimpleNamespace(content=[SimpleNamespace(text=next(self._replies))])
+
+            self.messages = _Messages()
+
+    fake_client = _SequentialClient([
+        "not a design object, nothing here parses as JSON",
+        '[{"piece": "bodice_back", "point": "cb_neck", "dx": 0, "dy": 4, '
+        '"reason": "back pulled across the shoulder blade last time"}]',
+    ])
+    app.dependency_overrides[main_module.get_anthropic_client] = lambda: fake_client
+    client, conn, pattern = _client_with_db()
+    edited = pattern.to_dict()
+    edited["pieces"][0]["points"][0]["x"] += 2
+    client.post(f"/patterns/{pattern.id}/revise", json={
+        "pattern": edited, "reason": "widened the back waist dart",
+        "fit_notes": "the back pulled across the shoulder blade",
+        "source": "muslin_fitting",
+    })
+    croquis_ref = _uploaded_croquis_ref(client, tmp_path, monkeypatch)
+    body = {**_NEW_PATTERN_BODY, "croquis_ref": croquis_ref}
+
+    created = client.post("/patterns", json=body)
+
+    assert created.status_code == 200
+    assert len(fake_client.calls) == 2
+    reason = conn.execute(
+        "SELECT reason FROM revisions WHERE pattern_id = ?", (created.json()["id"],),
+    ).fetchone()[0]
+    assert "the design proposal was unusable" in reason
+    assert "Adjusted from fitting history" in reason
+    assert "shoulder blade" in reason
+
+
+# --------------------------------------------------------------------------
 # POST /croquis — a plain upload since Phase 9 ("Design intent is
 # author-written"): it stores the sketch and returns a ref, and makes no
 # vision call at all. The sketch reaches a model later, in the drafting
