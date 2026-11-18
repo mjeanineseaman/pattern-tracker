@@ -982,6 +982,39 @@ What it needs that the others don't:
 joined outline matches the single-piece outline, and whose seam absorbs the
 bust-dart intake.
 
+**Deferred, 2026-11-17 — this list undersold the real scope.** Worked
+through the geometry before writing anything (same discipline as Tiers 1
+and 2: measure first), and it surfaced three questions with no existing
+precedent to check against, not just implementation detail:
+
+1. **What the seam's two edges actually share.** `bodice_front`/
+   `bodice_back` mate a seam by *length* only (`check_mated_seams`) — each
+   has always been its own independently-coordinated piece. Centre and
+   side aren't that: they're cut from one already-correct piece, so part
+   of their geometry is literally shared by construction and part isn't,
+   and which is which depends on exactly where the cut runs relative to
+   the existing dart's `leg_a`/`leg_b`.
+2. **How much suppression the seam carries.** A seam built from the
+   dart's own `leg_a`/`leg_b` positions, with equal-length curves up to
+   the armhole, carries exactly what the dart already had — consistent
+   with everything built so far, no new tolerance needed. A couture-style
+   princess seam eases the two curves to *different* lengths for extra
+   bust fullness — a real, more useful technique, but it needs a second,
+   deliberately-looser tolerance next to `check_mated_seams`' existing
+   2mm, which doesn't exist anywhere in this codebase yet.
+3. **`check_ease`'s bust formula reads `underarm_front.x` off
+   `bodice_front` directly.** Once that point lives on
+   `bodice_front_side`, the check has to generalize to a split front —
+   real, unplanned work the list above didn't mention.
+
+None of this is a reason the tier can't be built — it's the same kind of
+drafting-formula decision bodice.py's own dart-apex-standoff needed a
+person for, just bigger. Put to the user rather than guessed at
+(AskUserQuestion, mirroring Tier 2's shoulder-dart decision): defer,
+matching the "worth building when a princess-seam design is actually
+wanted, not before" note already above. Revisit with the three points
+above as a starting point, not a surprise.
+
 ### Prerequisite, now done: truing the seams
 
 Reviewing the human workflow surfaced that the validator never checked the
