@@ -69,7 +69,7 @@ _BUST_DART_BASE_WIDTH_CM = 7.0
 _BUST_DART_BASELINE_BUST_CM = 88.0
 _BUST_DART_INCREMENT_BUST_CM = 4.0
 _BUST_DART_INCREMENT_WIDTH_CM = 0.6
-_DART_APEX_STANDOFF_CM = 1.0
+DART_APEX_STANDOFF_CM = 1.0
 _BACK_WIDTH_EASE_CM = 0.5
 _B1_DIAGONAL_CM = 2.5
 _B2_DIAGONAL_CM = 1.5
@@ -314,7 +314,7 @@ def _shared_frame(m: Measurements, intent: DesignIntent) -> _Shared:
     # itself places "on line RS").
     vertical_bust_line_r1 = (bust_point[0], 1.5)
     vertical_bust_line_s = (bust_point[0], -nape_to_waist)
-    front_shoulder_dart_apex = (bust_point[0], bust_point[1] + _DART_APEX_STANDOFF_CM)  # U, on line R1-S
+    front_shoulder_dart_apex = (bust_point[0], bust_point[1] + DART_APEX_STANDOFF_CM)  # U, on line R1-S
 
     dart_width = _BUST_DART_BASE_WIDTH_CM + _BUST_DART_INCREMENT_WIDTH_CM * (
         (bust - _BUST_DART_BASELINE_BUST_CM) / _BUST_DART_INCREMENT_BUST_CM
@@ -355,7 +355,7 @@ def _shared_frame(m: Measurements, intent: DesignIntent) -> _Shared:
 
     back_waist_dart_apex = (w[0] / 2, I[1])                       # C1 (back)
     back_waist_dart_base = (back_waist_dart_apex[0], B[1])        # C2 (back): same x as C1, same y as B
-    front_waist_dart_apex = (bust_point[0], bust_point[1] - _DART_APEX_STANDOFF_CM)
+    front_waist_dart_apex = (bust_point[0], bust_point[1] - DART_APEX_STANDOFF_CM)
     cf_waist = F
 
     total_suppression = bust - (waist + ease_waist)

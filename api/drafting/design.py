@@ -43,7 +43,7 @@ _MIN_DART_LENGTH_MM = 20.0
 
 # Below this much intake there is nothing to fold. A dart released to less
 # than it is not a shallower dart, it is a crease, and the right answer is
-# to drop it — see `_drop_dart`.
+# to drop it — see `drop_dart`.
 _MIN_DART_INTAKE_MM = 2.0
 
 # Widening a neckline slides the neck point toward the next point along the
@@ -241,15 +241,20 @@ def _dart_d1_id(apex_id: str) -> str:
     return apex_id.removesuffix("_apex") + "_d1"
 
 
-def _drop_dart(piece: PatternPiece, dart) -> None:
+def drop_dart(piece: PatternPiece, dart) -> None:
     """Remove a dart the design has closed, and heal the seam it sat on.
 
-    Two parameters arrive here. `waist_suppression=0` releases a dart's
-    intake to nothing, and cropping far enough up takes the hem above a
-    dart's apex. Either way the dart is gone, and a dart with coincident
-    legs is not a smaller dart — it is three identical points on a seam,
-    which divides by zero on the way to rebuilding D1 and leaves zero
-    length segments for the exporter to stitch.
+    Two Tier 1 parameters arrive here directly. `waist_suppression=0`
+    releases a dart's intake to nothing, and cropping far enough up takes
+    the hem above a dart's apex. Either way the dart is gone, and a dart
+    with coincident legs is not a smaller dart — it is three identical
+    points on a seam, which divides by zero on the way to rebuilding D1
+    and leaves zero length segments for the exporter to stitch.
+
+    Public (not `_drop_dart`) because api.drafting.dart_rotation (Tier 2)
+    reuses it too: relocating the bust dart closes it at its old position
+    exactly the same way a design parameter can, then opens a new one
+    elsewhere.
 
     The legs and D1 leave the piece; the apex stays, as an interior
     reference like `bust_point` and the other guide points that sit on no
@@ -430,7 +435,7 @@ def apply_hem_change(pieces: list[PatternPiece], change_mm: float) -> list[Patte
         for dart in _waist_darts(piece):
             remaining = points[dart.leg_a].y - crop - points[dart.apex].y
             if remaining < _MIN_DART_LENGTH_MM:
-                _drop_dart(piece, dart)
+                drop_dart(piece, dart)
         points = piece.point_map()
 
         tapers: list[tuple[str, str]] = [
@@ -488,7 +493,7 @@ def apply_waist_suppression(
             leg_a, leg_b = points[dart.leg_a], points[dart.leg_b]
             intake = math.hypot(leg_a.x - leg_b.x, leg_a.y - leg_b.y)
             if intake * suppression < _MIN_DART_INTAKE_MM:
-                _drop_dart(piece, dart)
+                drop_dart(piece, dart)
                 continue
             mid_x, mid_y = (leg_a.x + leg_b.x) / 2, (leg_a.y + leg_b.y) / 2
             for leg in (leg_a, leg_b):

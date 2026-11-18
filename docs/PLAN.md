@@ -898,6 +898,42 @@ person rather than a model averaging remembered numbers — so it's flagged,
 not changed. It matters more once darts are being rotated, since the apex
 distance is preserved through the pivot.
 
+**Built — "waist", "side", and "french", not "shoulder".** `api/drafting/
+dart_rotation.py::rotate_bust_dart_to()`. Centre front has to stay fixed
+on the fold, which means the arc that pivots is always the one on the
+*other* side of the dart — the side seam, armhole, and shoulder, rigidly,
+as one body. "side" and "french" both cut into the side seam below
+`underarm_front`, so only the dart's own points and `side_waist_front`
+ever move; `underarm_front`, the armhole, and the shoulder are unchanged,
+checked directly rather than assumed (`tests/test_dart_rotation.py`).
+
+"shoulder" turned out not to be the simple case the geometry's presence
+suggested. Reaching it means rotating that same arc all the way up
+through the armhole to the existing shoulder dart's far leg — which drags
+`underarm_front` along too: measured at **~13mm** on a 34in bust, nowhere
+close to tolerance. Put to a human rather than guessed at (same call as
+the apex-standoff question above): ship side + french now, defer
+shoulder. It raises a clear, specific error rather than pretending to
+support it.
+
+**A second thing only testing across body sizes caught** (same lesson as
+Tier 1): `side`/`french`'s target point is a linear interpolation between
+`underarm_front` and `side_waist_front`, by `bust_point`'s own height on
+that line. The conservation proof needs that target to land *between* the
+two — on a body whose armscye-depth estimate is large relative to its own
+`bust_height`, `bust_point` ends up *above* `underarm_front` instead, and
+the interpolation silently extrapolates past it instead of landing on the
+seam (a 51.7mm side-seam mismatch at one tested bust, found by running the
+same bust-range validate.py's ease check was calibrated against — not a
+realistic single body, but enough to prove the formula wasn't bounded).
+Fixed with an explicit precondition: `rotate_bust_dart_to` now raises
+rather than silently building a piece whose seams don't match.
+
+**Not yet built:** the model-call layer (`dart_rotation_from_croquis.py`,
+by analogy with Tier 1's `design_from_croquis.py`) and wiring it into
+`create_pattern` — `bust_dart_position` doesn't reach the pipeline yet,
+same gap Tier 1 had between its first and second commits.
+
 ### Tier 3 — Style lines
 
 Princess seams and similar: one piece becomes two, with the dart intake
